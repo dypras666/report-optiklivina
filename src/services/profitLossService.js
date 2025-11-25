@@ -125,8 +125,8 @@ export async function upsertProfitLossToSupabase({ pembukuanId, cabangId, market
   const current = await fetchProfitLossReport({ pembukuanId, cabangId, marketingId })
   const payload = {
     pembukuan_id: Number(pembukuanId||0),
-    cabang_id: cabangId ? Number(cabangId) : null,
-    marketing_id: marketingId ? Number(marketingId) : null,
+    cabang_id: cabangId ? Number(cabangId) : 0,
+    marketing_id: marketingId ? Number(marketingId) : 0,
     laba_bersih: Number(current?.laba_bersih||0),
     created_at: new Date().toISOString()
   }
@@ -143,10 +143,8 @@ export async function fetchProfitLossFromSupabase({ pembukuanId, cabangId, marke
     .from('profit_loss_summaries')
     .select('*')
     .eq('pembukuan_id', Number(pembukuanId||0))
-  if (cabangId) query.eq('cabang_id', Number(cabangId))
-  else query.is('cabang_id', null)
-  if (marketingId) query.eq('marketing_id', Number(marketingId))
-  else query.is('marketing_id', null)
+  query.eq('cabang_id', cabangId ? Number(cabangId) : 0)
+  query.eq('marketing_id', marketingId ? Number(marketingId) : 0)
   const { data, error } = await query.limit(1)
   if (error) throw new Error(error.message || 'supabase error')
   return { data: Array.isArray(data) ? (data[0] || null) : null }

@@ -3,6 +3,7 @@ import cors from 'cors'
 import { pool } from './db.js'
 import fs from 'fs'
 import path from 'path'
+import crypto from 'crypto'
 import reportsRouter from './routes/reports.js'
 import customersRouter from './routes/customers.js'
 import marketingRouter from './routes/marketing.js'
@@ -51,15 +52,62 @@ app.get('/api/health', async (req, res) => {
   }
 })
 
-app.use('/api/reports', reportsRouter)
-app.use('/api/customers', customersRouter)
-app.use('/api/marketing', marketingRouter)
-app.use('/api/toko', tokoRouter)
-app.use('/api/aset', asetRouter)
-app.use('/api/omset', omsetRouter)
-app.use('/api/pembukuan', pembukuanRouter)
-app.use('/api/options', optionsRouter)
-app.use('/api/analytics', analyticsRouter)
+function b64url(s){ return Buffer.from(s).toString('base64url') }
+function signToken(payload, secret){
+  const data = b64url(JSON.stringify(payload))
+  const sig = crypto.createHmac('sha256', secret).update(data).digest('base64url')
+  return `${data}.${sig}`
+}
+function verifyToken(token, secret){
+  if(!token || !secret) return null
+  const parts = String(token).split('.')
+  if(parts.length !== 2) return null
+  const [data, sig] = parts
+  const expected = crypto.createHmac('sha256', secret).update(data).digest('base64url')
+  if(!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null
+  try{
+    const payload = JSON.parse(Buffer.from(data, 'base64url').toString('utf8'))
+    if(payload.exp && Date.now() > payload.exp) return null
+    return payload
+  }catch{ return null }
+}
+
+app.post('/api/auth/login', async (req, res) => {
+  try{
+    const u = String(req.body?.username||'')
+    const p = String(req.body?.password||'')
+    const adminU = process.env.ADMIN_USER||''
+    const adminP = process.env.ADMIN_PASS||''
+    const secret = process.env.AUTH_SECRET||''
+    if(!adminU || !adminP || !secret) return res.status(500).json({ error: 'auth not configured' })
+    if(u !== adminU || p !== adminP) return res.status(401).json({ error: 'invalid credentials' })
+    const iat = Date.now()
+    const exp = iat + (12 * 60 * 60 * 1000)
+    const token = signToken({ sub: u, iat, exp }, secret)
+    res.json({ token })
+  }catch(e){ res.status(500).json({ error: e.message }) }
+})
+
+function requireAuth(req, res, next){
+  try{
+    const auth = req.headers['authorization']||''
+    const token = auth.startsWith('Bearer ') ? auth.slice(7) : (req.query?.token || '')
+    const secret = process.env.AUTH_SECRET||''
+    const payload = verifyToken(token, secret)
+    if(!payload) return res.status(401).json({ error: 'unauthorized' })
+    next()
+  }catch{ return res.status(401).json({ error: 'unauthorized' }) }
+}
+
+app.use('/api/reports', requireAuth, reportsRouter)
+app.use('/api/customers', requireAuth, customersRouter)
+app.use('/api/marketing', requireAuth, marketingRouter)
+app.use('/api/toko', requireAuth, tokoRouter)
+app.use('/api/aset', requireAuth, asetRouter)
+app.use('/api/omset', requireAuth, omsetRouter)
+app.use('/api/pembukuan', requireAuth, pembukuanRouter)
+app.use('/api/options', requireAuth, optionsRouter)
+app.use('/api/analytics', requireAuth, analyticsRouter)
  
 
 // Simple in-memory job queue for report generation
