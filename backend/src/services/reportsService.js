@@ -2620,58 +2620,60 @@ export async function fetchCustomerProfileByCode({ kode }) {
 
 export async function fetchCustomers({ page = 1, limit = 20, cabangId, marketingId, ktp, kk, aging, doc, q, addr, status, unpaid }) {
   const offset = Math.max(0, (Number(page) - 1) * Number(limit))
-  const where = ['c.kode_customer IS NOT NULL']
+  const where = ['c_inner.kode_customer IS NOT NULL']
   const params = []
-  if (cabangId) { where.push('c.cabang = ?'); params.push(cabangId) }
-  if (marketingId) { where.push('c.id_marketing = ?'); params.push(marketingId) }
-  if (status === 'blacklist') { where.push('c.status_user = ?'); params.push('blacklist') }
-  if (status === 'normal') { where.push('(c.status_user IS NULL OR c.status_user != ?)'); params.push('blacklist') }
+  
+  if (cabangId) { where.push('c_inner.cabang = ?'); params.push(cabangId) }
+  if (marketingId) { where.push('c_inner.id_marketing = ?'); params.push(marketingId) }
+  if (status === 'blacklist') { where.push('c_inner.status_user = ?'); params.push('blacklist') }
+  if (status === 'normal') { where.push('(c_inner.status_user IS NULL OR c_inner.status_user != ?)'); params.push('blacklist') }
   if (q) {
     const like = `%${String(q).toLowerCase()}%`
-    where.push('(LOWER(COALESCE(c.nama_customer,\'\')) LIKE ? OR LOWER(COALESCE(c.no_hp,\'\')) LIKE ? OR LOWER(COALESCE(c.no_ktp,\'\')) LIKE ?)')
+    where.push('(LOWER(COALESCE(c_inner.nama_customer,\'\')) LIKE ? OR LOWER(COALESCE(c_inner.no_hp,\'\')) LIKE ? OR LOWER(COALESCE(c_inner.no_ktp,\'\')) LIKE ?)')
     params.push(like, like, like)
   }
   if (addr) {
     const likeAddr = `%${String(addr).toLowerCase()}%`
-    where.push('LOWER(COALESCE(c.alamat_lengkap,\'\')) LIKE ?')
+    where.push('LOWER(COALESCE(c_inner.alamat_lengkap,\'\')) LIKE ?')
     params.push(likeAddr)
   }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
-  const sqlBase = `
-    FROM customer c
-      LEFT JOIN transaksi t ON t.kode_customer = c.kode_customer
-      LEFT JOIN (
-        SELECT kode_transaksi, SUM(jumlah_bayar + IFNULL(bayar_lain, 0) + IFNULL(potong_marketing, 0)) AS jml_bayar, MAX(tanggal_bayar) AS tanggal_bayar
-        FROM transaksi_pembayaran
-        GROUP BY kode_transaksi
-      ) tp ON tp.kode_transaksi = t.kode_transaksi
-      LEFT JOIN (
-        SELECT kode_transaksi, SUM(voucher_use) AS total_voucher
-        FROM sponsor_voucher_use
-        GROUP BY kode_transaksi
-      ) svu ON svu.kode_transaksi = t.kode_transaksi
-      LEFT JOIN cabang_toko ON cabang_toko.id_cabang = c.cabang
-      LEFT JOIN admin ON admin.id = c.id_marketing
-    ${whereSql}
-  `
+
   const sqlData = `
     SELECT c.kode_customer, c.nama_customer, c.no_hp, c.no_ktp, c.status_user, c.blacklist_reason, c.alamat_lengkap,
            cabang_toko.nama_cabang, admin.nama_lengkap AS nama_marketing,
            c.file_ktp, c.file_kk,
-           COALESCE(SUM((CASE WHEN (t.harga_nego > 0) THEN t.harga_nego ELSE t.total_harga END) - IFNULL(tp.jml_bayar,0) - IFNULL(svu.total_voucher,0)), 0) AS sisa_total,
-           COALESCE(MAX(CASE WHEN ((CASE WHEN (t.harga_nego > 0) THEN t.harga_nego ELSE t.total_harga END) - IFNULL(tp.jml_bayar,0) - IFNULL(svu.total_voucher,0)) > 0
-                    THEN TIMESTAMPDIFF(MONTH, COALESCE(tp.tanggal_bayar, t.tanggal_order), CURDATE()) ELSE 0 END), 0) AS aging_months,
-           MAX(COALESCE(tp.tanggal_bayar, t.tanggal_order)) AS last_activity,
-           MIN(t.tanggal_order) AS tanggal_register,
-           (SELECT jenis_transaksi 
+           (
+             SELECT IFNULL(SUM((CASE WHEN (t.harga_nego > 0) THEN t.harga_nego ELSE t.total_harga END) -
+              IFNULL((SELECT SUM(jumlah_bayar + IFNULL(bayar_lain,0) + IFNULL(potong_marketing,0)) FROM transaksi_pembayaran WHERE kode_transaksi = t.kode_transaksi), 0) -
+              IFNULL((SELECT SUM(voucher_use) FROM sponsor_voucher_use WHERE kode_transaksi = t.kode_transaksi), 0)), 0)
+             FROM transaksi t WHERE t.kode_customer = c.kode_customer
+           ) AS sisa_total,
+           (
+             SELECT COALESCE(MAX(CASE WHEN ((CASE WHEN (t.harga_nego > 0) THEN t.harga_nego ELSE t.total_harga END) -
+              IFNULL((SELECT SUM(jumlah_bayar + IFNULL(bayar_lain,0) + IFNULL(potong_marketing,0)) FROM transaksi_pembayaran WHERE kode_transaksi = t.kode_transaksi), 0) -
+              IFNULL((SELECT SUM(voucher_use) FROM sponsor_voucher_use WHERE kode_transaksi = t.kode_transaksi), 0)) > 0
+                    THEN TIMESTAMPDIFF(MONTH, COALESCE((SELECT MAX(tanggal_bayar) FROM transaksi_pembayaran WHERE kode_transaksi = t.kode_transaksi), t.tanggal_order), CURDATE()) ELSE 0 END), 0)
+             FROM transaksi t WHERE t.kode_customer = c.kode_customer
+           ) AS aging_months,
+           (SELECT MIN(tanggal_order) FROM transaksi WHERE kode_customer = c.kode_customer) as tanggal_register,
+           (SELECT MAX(COALESCE((SELECT MAX(tanggal_bayar) FROM transaksi_pembayaran WHERE kode_transaksi = t.kode_transaksi), t.tanggal_order)) FROM transaksi t WHERE t.kode_customer = c.kode_customer) as last_activity,
+           (SELECT tpx.jenis_transaksi 
             FROM transaksi_pembayaran tpx 
-            WHERE tpx.kode_transaksi IN (SELECT tx.kode_transaksi FROM transaksi tx WHERE tx.kode_customer = c.kode_customer)
+            INNER JOIN transaksi tx ON tx.kode_transaksi = tpx.kode_transaksi
+            WHERE tx.kode_customer = c.kode_customer
             ORDER BY tpx.tanggal_bayar DESC, tpx.id_pembayaran DESC 
             LIMIT 1) AS last_payment_type
-    ${sqlBase}
-    GROUP BY c.kode_customer, c.nama_customer, c.no_hp, c.no_ktp, c.status_user, c.blacklist_reason, c.alamat_lengkap, cabang_toko.nama_cabang, admin.nama_lengkap, c.file_ktp, c.file_kk
-    ORDER BY tanggal_register DESC, last_activity DESC
-    ${Number(limit) > 0 ? 'LIMIT ? OFFSET ?' : ''}
+    FROM (
+        SELECT c_inner.kode_customer, c_inner.nama_customer, c_inner.no_hp, c_inner.no_ktp, c_inner.status_user, c_inner.blacklist_reason, c_inner.alamat_lengkap, c_inner.file_ktp, c_inner.file_kk, c_inner.cabang, c_inner.id_marketing, c_inner.id_customer
+        FROM customer c_inner
+        ${whereSql}
+        ORDER BY c_inner.id_customer DESC
+        ${Number(limit) > 0 ? 'LIMIT ? OFFSET ?' : ''}
+    ) c
+    LEFT JOIN cabang_toko ON cabang_toko.id_cabang = c.cabang
+    LEFT JOIN admin ON admin.id = c.id_marketing
+    ORDER BY c.id_customer DESC
   `
   const dataParams = Number(limit) > 0 ? [...params, Number(limit), Number(offset)] : params
   const [rowsRaw] = await pool.query(sqlData, dataParams)
@@ -2681,6 +2683,7 @@ export async function fetchCustomers({ page = 1, limit = 20, cabangId, marketing
     aging_months: Number(r.aging_months || 0),
     nomor_urut: (Number(limit) > 0 ? offset : 0) + idx + 1
   }))
+  
   if (doc === 'ktp') rows = rows.filter(r => !!r.file_ktp)
   if (doc === 'kk') rows = rows.filter(r => !!r.file_kk)
   if (doc === 'lengkap') rows = rows.filter(r => !!r.file_ktp && !!r.file_kk)
@@ -2701,11 +2704,13 @@ export async function fetchCustomers({ page = 1, limit = 20, cabangId, marketing
   }))
 
   const sqlCount = `
-    SELECT COUNT(DISTINCT c.kode_customer) AS total
-    ${sqlBase}
+    SELECT COUNT(c_inner.kode_customer) AS total
+    FROM customer c_inner
+    ${whereSql}
   `
   const [countRows] = await pool.query(sqlCount, params)
   const total = Number(countRows?.[0]?.total || 0)
+  
   return { data: mapped, total }
 }
 
@@ -2714,22 +2719,22 @@ export async function fetchCustomerStats({ cabangId, marketingId }) {
   const params = []
   if (cabangId) { where.push('cabang = ?'); params.push(cabangId) }
   if (marketingId) { where.push('id_marketing = ?'); params.push(marketingId) }
-
   const w = where.join(' AND ')
 
-  // Total
-  const [totalRows] = await pool.query(`SELECT COUNT(*) as cnt FROM customer WHERE ${w}`, params)
-  const total = Number(totalRows?.[0]?.cnt || 0)
+  // Combine Total, Blacklist, and Complete Docs in one query for maximum performance
+  const [statsRows] = await pool.query(`
+    SELECT 
+      COUNT(c.kode_customer) as total,
+      SUM(CASE WHEN c.status_user = 'blacklist' THEN 1 ELSE 0 END) as blacklist,
+      SUM(CASE WHEN (c.file_ktp IS NOT NULL AND c.file_ktp <> '') AND (c.file_kk IS NOT NULL AND c.file_kk <> '') THEN 1 ELSE 0 END) as complete
+    FROM customer c 
+    WHERE ${w}
+  `, params)
+  
+  const total = Number(statsRows?.[0]?.total || 0)
+  const blacklist = Number(statsRows?.[0]?.blacklist || 0)
+  const complete = Number(statsRows?.[0]?.complete || 0)
 
-  // Blacklist
-  const [blRows] = await pool.query(`SELECT COUNT(*) as cnt FROM customer WHERE ${w} AND status_user = 'blacklist'`, params)
-  const blacklist = Number(blRows?.[0]?.cnt || 0)
-
-  // Complete Docs
-  const [completeRows] = await pool.query(`SELECT COUNT(*) as cnt FROM customer WHERE ${w} AND (file_ktp IS NOT NULL AND file_ktp <> '') AND (file_kk IS NOT NULL AND file_kk <> '')`, params)
-  const complete = Number(completeRows?.[0]?.cnt || 0)
-
-  // Unpaid (Belum Lunas) - customers with outstanding balance
   const whereCustomer = ['c.kode_customer IS NOT NULL']
   const paramsUnpaid = []
   if (cabangId) { whereCustomer.push('c.cabang = ?'); paramsUnpaid.push(cabangId) }
@@ -2738,43 +2743,17 @@ export async function fetchCustomerStats({ cabangId, marketingId }) {
   const [unpaidRows] = await pool.query(`
     SELECT COUNT(DISTINCT c.kode_customer) as cnt
     FROM customer c
-      LEFT JOIN transaksi t ON t.kode_customer = c.kode_customer
-      LEFT JOIN (
-        SELECT kode_transaksi, SUM(jumlah_bayar + IFNULL(bayar_lain, 0) + IFNULL(potong_marketing, 0)) AS jml_bayar
-        FROM transaksi_pembayaran
-        GROUP BY kode_transaksi
-      ) tp ON tp.kode_transaksi = t.kode_transaksi
-      LEFT JOIN (
-        SELECT kode_transaksi, SUM(voucher_use) AS total_voucher
-        FROM sponsor_voucher_use
-        GROUP BY kode_transaksi
-      ) svu ON svu.kode_transaksi = t.kode_transaksi
-    WHERE ${whereCustomer.join(' AND ')}
-    GROUP BY c.kode_customer
-    HAVING SUM(IFNULL((CASE WHEN (t.harga_nego > 0) THEN t.harga_nego ELSE t.total_harga END) - IFNULL(tp.jml_bayar,0) - IFNULL(svu.total_voucher,0), 0)) > 0
+    JOIN transaksi t ON t.kode_customer = c.kode_customer
+    WHERE c.kode_customer IS NOT NULL 
+      ${paramsUnpaid.length ? 'AND ' + whereCustomer.slice(1).join(' AND ') : ''}
+      AND (
+        (CASE WHEN (t.harga_nego > 0) THEN t.harga_nego ELSE t.total_harga END) -
+        IFNULL((SELECT SUM(jumlah_bayar + IFNULL(bayar_lain,0) + IFNULL(potong_marketing,0)) FROM transaksi_pembayaran WHERE kode_transaksi = t.kode_transaksi), 0) -
+        IFNULL((SELECT SUM(voucher_use) FROM sponsor_voucher_use WHERE kode_transaksi = t.kode_transaksi), 0)
+      ) > 0
   `, paramsUnpaid)
-  const unpaid = unpaidRows?.length || 0
-
-  // Lunas (Paid) - customers with zero balance
-  const [lunasRows] = await pool.query(`
-    SELECT COUNT(DISTINCT c.kode_customer) as cnt
-    FROM customer c
-      LEFT JOIN transaksi t ON t.kode_customer = c.kode_customer
-      LEFT JOIN (
-        SELECT kode_transaksi, SUM(jumlah_bayar + IFNULL(bayar_lain, 0) + IFNULL(potong_marketing, 0)) AS jml_bayar
-        FROM transaksi_pembayaran
-        GROUP BY kode_transaksi
-      ) tp ON tp.kode_transaksi = t.kode_transaksi
-      LEFT JOIN (
-        SELECT kode_transaksi, SUM(voucher_use) AS total_voucher
-        FROM sponsor_voucher_use
-        GROUP BY kode_transaksi
-      ) svu ON svu.kode_transaksi = t.kode_transaksi
-    WHERE ${whereCustomer.join(' AND ')}
-    GROUP BY c.kode_customer
-    HAVING SUM(IFNULL((CASE WHEN (t.harga_nego > 0) THEN t.harga_nego ELSE t.total_harga END) - IFNULL(tp.jml_bayar,0) - IFNULL(svu.total_voucher,0), 0)) = 0
-  `, paramsUnpaid)
-  const lunas = lunasRows?.length || 0
+  const unpaid = Number(unpaidRows?.[0]?.cnt || 0)
+  const lunas = total - unpaid
 
   return { total, blacklist, complete, unpaid, lunas }
 }

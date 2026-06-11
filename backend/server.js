@@ -4,10 +4,11 @@ import path from 'path';
 import app from './src/app.js';
 
 const port = parseInt(process.env.PORT || '4000', 10);
+const host = process.env.HOST || '0.0.0.0';
 
 // Start the server
-const server = app.listen(port, () => {
-  console.log(`Report backend listening on http://localhost:${port}`);
+const server = app.listen(port, host, () => {
+  console.log(`Report backend listening on http://${host}:${port}`);
 });
 
 // Graceful shutdown

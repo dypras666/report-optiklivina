@@ -346,11 +346,16 @@ async function runNext() {
   if (WORKING) return
   let next = QUEUE.shift()
   if (!next) {
-    await dbRequeueStuckInProgress(120000)
-    const p = await dbGetNextPending()
-    if (!p) return
-    next = { id: p.id, type: p.type, payload: JSON.parse(p.payload_json || '{}'), status: p.status, created_at: p.created_at, started_at: p.started_at, finished_at: p.finished_at, progress: p.progress, result: null, error: null, marketing_name: p.marketing_name, period_text: p.period_text }
-    JOBS.set(next.id, next)
+    try {
+      await dbRequeueStuckInProgress(120000)
+      const p = await dbGetNextPending()
+      if (!p) return
+      next = { id: p.id, type: p.type, payload: JSON.parse(p.payload_json || '{}'), status: p.status, created_at: p.created_at, started_at: p.started_at, finished_at: p.finished_at, progress: p.progress, result: null, error: null, marketing_name: p.marketing_name, period_text: p.period_text }
+      JOBS.set(next.id, next)
+    } catch (err) {
+      console.error("[Job Queue] DB error while polling:", err.message)
+      return
+    }
   }
   WORKING = true
   next.status = 'in_progress'
