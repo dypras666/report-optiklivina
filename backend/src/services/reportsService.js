@@ -2744,12 +2744,22 @@ export async function fetchCustomerStats({ cabangId, marketingId }) {
     SELECT COUNT(DISTINCT c.kode_customer) as cnt
     FROM customer c
     JOIN transaksi t ON t.kode_customer = c.kode_customer
+    LEFT JOIN (
+      SELECT kode_transaksi, SUM(jumlah_bayar + IFNULL(bayar_lain,0) + IFNULL(potong_marketing,0)) AS jml_bayar
+      FROM transaksi_pembayaran
+      GROUP BY kode_transaksi
+    ) tp ON tp.kode_transaksi = t.kode_transaksi
+    LEFT JOIN (
+      SELECT kode_transaksi, SUM(voucher_use) AS total_voucher
+      FROM sponsor_voucher_use
+      GROUP BY kode_transaksi
+    ) svu ON svu.kode_transaksi = t.kode_transaksi
     WHERE c.kode_customer IS NOT NULL 
       ${paramsUnpaid.length ? 'AND ' + whereCustomer.slice(1).join(' AND ') : ''}
       AND (
         (CASE WHEN (t.harga_nego > 0) THEN t.harga_nego ELSE t.total_harga END) -
-        IFNULL((SELECT SUM(jumlah_bayar + IFNULL(bayar_lain,0) + IFNULL(potong_marketing,0)) FROM transaksi_pembayaran WHERE kode_transaksi = t.kode_transaksi), 0) -
-        IFNULL((SELECT SUM(voucher_use) FROM sponsor_voucher_use WHERE kode_transaksi = t.kode_transaksi), 0)
+        IFNULL(tp.jml_bayar, 0) -
+        IFNULL(svu.total_voucher, 0)
       ) > 0
   `, paramsUnpaid)
   const unpaid = Number(unpaidRows?.[0]?.cnt || 0)
