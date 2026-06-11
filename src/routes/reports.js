@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { fetchOmsetToko, fetchProfitLossDetails } from '../services/reportsService.js'
+import { fetchOmsetToko, fetchProfitLossDetails, fetchBestCustomers, fetchBestCustomersV2, fetchPointUsage } from '../services/reportsService.js'
 import { fetchProfitLossReport, fetchProfitLossByCabang, upsertProfitLossToSupabase, fetchProfitLossFromSupabase, compareWithPrevious } from '../services/profitLossService.js'
 import customersRouter from './customers.js'
 import marketingRouter from './marketing.js'
@@ -26,12 +26,39 @@ router.get('/omset-toko', async (req, res) => {
   }
 })
 
+router.get('/best-customers', async (req, res) => {
+  try {
+    const page = req.query.page ? parseInt(req.query.page, 10) : 1
+    const limit = req.query.limit ? parseInt(req.query.limit, 10) : 50
+    const q = req.query.q || ''
+    const { data, total } = await fetchBestCustomersV2({ page, limit, q })
+    res.json({ data, meta: { page, limit, total, totalPages: Math.ceil(total / (limit || 1)) } })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+router.get('/point-usage', async (req, res) => {
+  try {
+    const pembukuanId = req.query.pembukuan_id ? parseInt(req.query.pembukuan_id, 10) : undefined
+    const page = req.query.page ? parseInt(req.query.page, 10) : 1
+    const limit = req.query.limit ? parseInt(req.query.limit, 10) : 50
+    const q = req.query.q || ''
+    const { data, total, summary } = await fetchPointUsage({ pembukuanId, page, limit, q })
+    res.json({ data, summary, meta: { page, limit, total, totalPages: Math.ceil(total / (limit || 1)) } })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
 router.get('/aset/idle', async (req, res) => {
   try {
     const cabangId = req.query.cabang ? parseInt(req.query.cabang, 10) : undefined
     const months = req.query.months ? parseInt(req.query.months, 10) : 3
+    const includeAllHistory = String(req.query.include_all_history || '').toLowerCase() === 'true'
+    const historyMonths = req.query.history_months ? parseInt(req.query.history_months, 10) : undefined
     if (!cabangId) return res.status(400).json({ error: 'cabang is required' })
-    const { data, summary } = await fetchAsetIdle({ cabangId, months })
+    const { data, summary } = await fetchAsetIdle({ cabangId, months, includeAllHistory, historyMonths })
     res.json({ data, summary })
   } catch (e) {
     res.status(500).json({ error: e.message })

@@ -13,7 +13,8 @@ router.get('/aset', async (req, res) => {
       res.json({ data, summary })
     } else {
       const includeIdle = req.query.include_idle === '1'
-      const { list, summary } = await fetchAsetReportAllCabang({ includeIdle })
+      const months = req.query.months ? parseInt(req.query.months, 10) : undefined
+      const { list, summary } = await fetchAsetReportAllCabang({ includeIdle, months })
       res.json({ data: list, summary })
     }
   } catch (e) {
@@ -52,7 +53,9 @@ router.get('/aset/master', async (req, res) => {
     const status = (req.query.status === '0' || req.query.status === '1') ? parseInt(req.query.status, 10) : undefined
     const order = (req.query.order==='qty' || req.query.order==='uang') ? req.query.order : undefined
     const soldOnly = req.query.sold_only === '1'
-    const { data, meta } = await fetchMasterItems({ jenis, page, limit, q, status, order, soldOnly })
+    const cabangId = req.query.cabang ? parseInt(req.query.cabang, 10) : undefined
+    const ready = req.query.ready
+    const { data, meta } = await fetchMasterItems({ jenis, page, limit, q, status, order, soldOnly, cabangId, ready })
     res.json({ data, meta })
   }catch(e){ res.status(500).json({ error: e.message }) }
 })

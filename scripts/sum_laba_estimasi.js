@@ -1,7 +1,7 @@
 async function main(){
   const pembukuanId = process.argv[2] || '124'
   const cabangId = process.argv[3] || '1'
-  const url = `http://localhost:4000/api/reports/laba-rugi/details?pembukuan_id=${encodeURIComponent(pembukuanId)}&cabang=${encodeURIComponent(cabangId)}`
+  const url = `https://reportsapi.optiklivina.com/api/reports/laba-rugi/details?pembukuan_id=${encodeURIComponent(pembukuanId)}&cabang=${encodeURIComponent(cabangId)}`
   const res = await fetch(url)
   const json = await res.json()
   const arr = Array.isArray(json.data) ? json.data : []
