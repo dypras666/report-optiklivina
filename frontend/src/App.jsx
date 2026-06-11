@@ -37,6 +37,23 @@ import SponsorApproval from './pages/SponsorApproval.jsx'
 const API_BASE = import.meta.env.VITE_API_BASE || 'https://reportsapi.optiklivina.com'
 const OMSET_URL = import.meta.env.VITE_OMSET_URL || ''
 
+const origFetch = window.fetch
+window.fetch = async (input, init = {}) => {
+  const headers = new Headers(init?.headers || {})
+  const tok = localStorage.getItem('authToken')
+  if (tok) headers.set('Authorization', `Bearer ${tok}`)
+  const res = await origFetch(input, { ...init, headers })
+  if (res?.status === 401) {
+    try { localStorage.removeItem('authToken') } catch { }
+    const urlStr = String(input)
+    const isWhitelisted = urlStr.includes('/api/aset') || urlStr.includes('/api/options') || urlStr.includes('/api/pembukuan/active')
+    if (!isWhitelisted) {
+       window.dispatchEvent(new Event('auth-logout'))
+    }
+  }
+  return res
+}
+
 export default function App() {
   const [notifications, setNotifications] = useState([])
   const [jobs, setJobs] = useState([])
@@ -134,31 +151,6 @@ export default function App() {
       setIsFullscreen(true)
     }
   }
-
-
-
-  useEffect(() => {
-    if (!origFetchRef.current) { origFetchRef.current = window.fetch }
-    const orig = origFetchRef.current
-    window.fetch = async (input, init = {}) => {
-      const headers = new Headers(init?.headers || {})
-      const tok = localStorage.getItem('authToken')
-      if (tok) headers.set('Authorization', `Bearer ${tok}`)
-      const res = await orig(input, { ...init, headers })
-      if (res?.status === 401) {
-        try { localStorage.removeItem('authToken') } catch { }
-        const urlStr = String(input)
-        const isWhitelisted = urlStr.includes('/api/aset') || urlStr.includes('/api/options') || urlStr.includes('/api/pembukuan/active')
-        if (!isWhitelisted) {
-           window.dispatchEvent(new Event('auth-logout'))
-        }
-      }
-      return res
-    }
-    const onLogout = () => setAuthToken('')
-    window.addEventListener('auth-logout', onLogout)
-    return () => window.removeEventListener('auth-logout', onLogout)
-  }, [])
 
   function readCookieToken() {
     try {
@@ -387,7 +379,7 @@ export default function App() {
 
   return (
     <SidebarProvider>
-      <div className="min-h-screen flex">
+      <>
         <AppSidebar />
         <SidebarInset className="px-0 mx-0 w-full min-w-0 overflow-x-hidden">
           <div className="mb-2 flex items-center justify-between">
@@ -603,7 +595,7 @@ export default function App() {
             </>
           )}
         </SidebarInset>
-      </div>
+      </>
     </SidebarProvider>
   )
 }

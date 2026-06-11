@@ -11,6 +11,7 @@ import {
   SidebarMenuItem,
   SidebarMenuButton,
   SidebarTrigger,
+  useSidebar,
 } from '@/components/ui/sidebar'
 import {
   Wallet,
@@ -72,32 +73,37 @@ export default function AppSidebar() {
     { title: 'Lensa', url: '#/master-lensa' },
   ]
 
-  const MenuSection = ({ label, items }) => (
-    <SidebarGroup>
-      <SidebarGroupLabel className="text-xs font-semibold text-slate-500 uppercase tracking-wider">{label}</SidebarGroupLabel>
-      <SidebarGroupContent>
-        <SidebarMenu>
-          {items.map((item) => (
-            <SidebarMenuItem key={item.url}>
-              <SidebarMenuButton asChild>
-                <a href={item.url} className="px-3 py-1.5 rounded-md hover:bg-slate-100 flex items-center gap-3 transition-colors">
-                  <item.icon size={16} className="text-slate-600" />
-                  <span className="text-sm text-slate-700 font-medium">{item.title}</span>
-                </a>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          ))}
-        </SidebarMenu>
-      </SidebarGroupContent>
-    </SidebarGroup>
-  )
+  const MenuSection = ({ label, items }) => {
+    const { state } = useSidebar();
+    return (
+      <SidebarGroup>
+        <SidebarGroupLabel className={`text-xs font-semibold text-slate-500 uppercase tracking-wider ${state === 'collapsed' ? 'hidden' : ''}`}>{label}</SidebarGroupLabel>
+        <SidebarGroupContent>
+          <SidebarMenu>
+            {items.map((item) => (
+              <SidebarMenuItem key={item.url}>
+                <SidebarMenuButton asChild>
+                  <a href={item.url} className={`px-3 py-1.5 rounded-md hover:bg-slate-100 flex items-center transition-colors ${state === 'collapsed' ? 'justify-center' : 'gap-3'}`}>
+                    <item.icon size={16} className="text-slate-600 shrink-0" />
+                    <span className={`text-sm text-slate-700 font-medium ${state === 'collapsed' ? 'hidden' : ''}`}>{item.title}</span>
+                  </a>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ))}
+          </SidebarMenu>
+        </SidebarGroupContent>
+      </SidebarGroup>
+    )
+  }
 
+  const { state } = useSidebar();
+  
   return (
-    <Sidebar>
-      <SidebarHeader className="p-4 border-b">
-        <div className="flex items-center gap-2 font-bold text-lg text-primary">
-          <div className="bg-primary text-white p-1 rounded">OL</div>
-          <span>Optik Livina</span>
+    <Sidebar collapsible="icon">
+      <SidebarHeader className={`p-4 border-b ${state === 'collapsed' ? 'px-2' : ''}`}>
+        <div className={`flex items-center font-bold text-lg text-primary ${state === 'collapsed' ? 'justify-center gap-0' : 'gap-2'}`}>
+          <div className="bg-primary text-white p-1 rounded shrink-0">OL</div>
+          <span className={state === 'collapsed' ? 'hidden' : ''}>Optik Livina</span>
         </div>
       </SidebarHeader>
 
@@ -124,7 +130,7 @@ export default function AppSidebar() {
         <MenuSection label="Voucher & Customer" items={voucherCustomerItems} />
 
         <SidebarGroup>
-          <SidebarGroupLabel className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Master Data</SidebarGroupLabel>
+          <SidebarGroupLabel className={`text-xs font-semibold text-slate-500 uppercase tracking-wider ${state === 'collapsed' ? 'hidden' : ''}`}>Master Data</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               <SidebarMenuItem>
@@ -132,14 +138,14 @@ export default function AppSidebar() {
                   <button
                     type="button"
                     onClick={() => setOpenMaster(o => !o)}
-                    className="w-full text-left px-3 py-1.5 rounded-md hover:bg-slate-100 flex items-center gap-3 transition-colors"
+                    className={`w-full text-left px-3 py-1.5 rounded-md hover:bg-slate-100 flex items-center transition-colors ${state === 'collapsed' ? 'justify-center' : 'gap-3'}`}
                   >
-                    <Database size={16} className="text-slate-600" />
-                    <span className="text-sm text-slate-700 font-medium">Data Master</span>
-                    <span className="ml-auto text-[10px] text-slate-400">{openMaster ? '▲' : '▼'}</span>
+                    <Database size={16} className="text-slate-600 shrink-0" />
+                    <span className={`text-sm text-slate-700 font-medium ${state === 'collapsed' ? 'hidden' : ''}`}>Data Master</span>
+                    <span className={`ml-auto text-[10px] text-slate-400 ${state === 'collapsed' ? 'hidden' : ''}`}>{openMaster ? '▲' : '▼'}</span>
                   </button>
                 </SidebarMenuButton>
-                {openMaster && (
+                {openMaster && state !== 'collapsed' && (
                   <div className="mt-1 ml-4 pl-5 border-l border-slate-200 space-y-1 py-1">
                     {masterLinks.map(link => (
                       <a
@@ -158,9 +164,9 @@ export default function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
 
-      <SidebarFooter className="p-4 border-t">
-        <div className="flex items-center justify-between">
-          <span className="text-[10px] text-slate-400 italic">v2.1 - Voucher Integrated</span>
+      <SidebarFooter className={`p-4 border-t ${state === 'collapsed' ? 'flex justify-center items-center' : ''}`}>
+        <div className={`flex items-center ${state === 'collapsed' ? 'justify-center' : 'justify-between'} w-full`}>
+          <span className={`text-[10px] text-slate-400 italic ${state === 'collapsed' ? 'hidden' : ''}`}>v2.1 - Voucher Integrated</span>
           <SidebarTrigger />
         </div>
       </SidebarFooter>
