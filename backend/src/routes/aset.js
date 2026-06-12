@@ -1,6 +1,7 @@
 import { Router } from 'express'
-import { fetchAsetReport, fetchAsetReportAllCabang, fetchAsetIdle, fetchAsetReportLight, fetchAsetIdleSummaryAll, upsertAssetStatus, deleteAssetStatus, fetchMasterItems, getAssetStatus } from '../services/reportsService.js'
+import { fetchAsetReport, fetchAsetReportAllCabang, fetchAsetIdle, fetchAsetReportLight, fetchAsetIdleSummaryAll, upsertAssetStatus, deleteAssetStatus, getAssetStatus } from '../services/reportsService.js'
 import { fetchProductTransactionsPage } from '../services/productTransactionsService.js'
+import { fetchMasterItemsES } from '../services/masterItemsService.js'
 
 const router = Router()
 
@@ -55,7 +56,7 @@ router.get('/aset/master', async (req, res) => {
     const soldOnly = req.query.sold_only === '1'
     const cabangId = req.query.cabang ? parseInt(req.query.cabang, 10) : undefined
     const ready = req.query.ready
-    const { data, meta } = await fetchMasterItems({ jenis, page, limit, q, status, order, soldOnly, cabangId, ready })
+    const { data, meta } = await fetchMasterItemsES({ jenis, page, limit, q, status, order, soldOnly, cabangId, ready })
     res.json({ data, meta })
   }catch(e){ res.status(500).json({ error: e.message }) }
 })

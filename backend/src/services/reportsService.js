@@ -1,4 +1,5 @@
 import { pool } from '../db.js'
+import { esClient } from '../elasticsearch.js'
 import { getActivePembukuan } from './pembukuanService.js'
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
@@ -25,252 +26,139 @@ async function ensureCustomerStatusUserCol() {
 export async function fetchMarketingReports({ pembukuanId, marketingId, cabangId, page = 1, limit = 20, includeSums = false, q, status }) {
   const active = await getActivePembukuan(pembukuanId)
   if (!active) return { data: [], total: 0 }
+  
   const offset = Math.max(0, (Number(page) - 1) * Number(limit))
-  const paramsBase = [active.tanggal_buka_buku, active.tanggal_tutup_buku] // for pembayaran subquery
-  const paramsWhere = [active.tanggal_buka_buku, active.tanggal_tutup_buku] // for transaksi.tanggal_order
-
-  let whereTransaksi = 'WHERE 1=1'
-  whereTransaksi += ' AND transaksi.tanggal_order BETWEEN ? AND ?'
-  if (marketingId) { whereTransaksi += ' AND transaksi.id_marketing = ?'; paramsWhere.push(marketingId) }
-  if (cabangId) { whereTransaksi += ' AND transaksi.id_cabang = ?'; paramsWhere.push(cabangId) }
-  if (q) { whereTransaksi += ' AND (transaksi.kode_transaksi LIKE ? OR customer.nama_customer LIKE ? OR admin.nama_lengkap LIKE ?)'; const like = `%${q}%`; paramsWhere.push(like, like, like) }
-  if (status === 'lunas') { whereTransaksi += ' AND ((CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) - IFNULL(tp.jml_bayar,0)) <= 0' }
-  if (status === 'belum') { whereTransaksi += ' AND ((CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) - IFNULL(tp.jml_bayar,0)) > 0' }
-  // Skip blacklist filter here to ensure compatibility across DBs
-
-  const baseJoin = `
-    FROM transaksi
-    LEFT JOIN (
-      SELECT kode_transaksi, SUM(jumlah_bayar + IFNULL(bayar_lain, 0) + IFNULL(potong_marketing, 0)) AS jml_bayar,
-             MAX(jenis_transaksi) AS jenis_transaksi,
-             MAX(tanggal_bayar) AS tanggal_bayar
-      FROM transaksi_pembayaran
-      WHERE tanggal_bayar BETWEEN ? AND ?
-        AND jenis_transaksi NOT IN ('piutang','kolektor')
-        AND (tipe_bayar = '1' OR tipe_bayar = 1)
-      GROUP BY kode_transaksi
-    ) tp ON tp.kode_transaksi = transaksi.kode_transaksi
-    LEFT JOIN (
-      SELECT kode_transaksi, SUM(voucher_use) AS total_voucher
-      FROM sponsor_voucher_use
-      GROUP BY kode_transaksi
-    ) svu ON svu.kode_transaksi = transaksi.kode_transaksi
-    LEFT JOIN (
-      SELECT id_grosir,
-             SUM(jumlah_harga) AS sum_jumlah_harga,
-             SUM(
-               CASE jenis_produk
-                 WHEN 'softlens' THEN (SELECT harga_modal FROM softlens WHERE softlens.id_softlens = transaksi_log.id_produk) * jumlah
-                 WHEN 'lensa'    THEN (SELECT harga_modal FROM lensa    WHERE lensa.id_lensa = transaksi_log.id_produk) * jumlah
-                 WHEN 'frame'    THEN (SELECT harga_modal FROM frame    WHERE frame.id_frame = transaksi_log.id_produk) * jumlah
-                 WHEN 'katalog'  THEN (SELECT harga_modal FROM produk   WHERE produk.id_produk = transaksi_log.id_produk) * jumlah
-                 ELSE 0
-               END
-              ) AS sum_modal,
-              SUM(
-                CASE jenis_produk
-                  WHEN 'softlens' THEN (SELECT harga_ongkir FROM softlens WHERE softlens.id_softlens = transaksi_log.id_produk) * jumlah
-                  WHEN 'lensa'    THEN (SELECT harga_ongkir FROM lensa    WHERE lensa.id_lensa = transaksi_log.id_produk) * jumlah
-                  WHEN 'frame'    THEN (SELECT harga_ongkir FROM frame    WHERE frame.id_frame = transaksi_log.id_produk) * jumlah
-                  WHEN 'katalog'  THEN (SELECT harga_ongkir FROM produk   WHERE produk.id_produk = transaksi_log.id_produk) * jumlah
-                  ELSE 0
-                END
-              ) AS sum_ongkir
-      FROM transaksi_log
-      WHERE transaksi_log.tanggal_log BETWEEN ? AND ?
-      GROUP BY id_grosir
-    ) it ON it.id_grosir = transaksi.kode_transaksi OR it.id_grosir = transaksi.id_transaksi
-    LEFT JOIN customer ON customer.kode_customer = transaksi.kode_customer
-    LEFT JOIN cabang_toko ON cabang_toko.id_cabang = transaksi.id_cabang
-    LEFT JOIN admin ON admin.id = transaksi.id_marketing
-    ${whereTransaksi}
-  `
-
-  const sqlData = `
-    SELECT transaksi.id_transaksi, transaksi.kode_transaksi, transaksi.tanggal_order,
-           customer.nama_customer, customer.status_user AS status_user, cabang_toko.nama_cabang, admin.nama_lengkap,
-           tp.jml_bayar, UPPER(tp.jenis_transaksi) AS jenis_transaksi_bayar,
-           IFNULL(svu.total_voucher, 0) AS total_voucher,
-           (CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) AS fix_harga,
-           ((CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) - IFNULL(tp.jml_bayar,0) - IFNULL(svu.total_voucher,0)) AS sisa_bayar,
-           IFNULL(it.sum_ongkir,0) AS ongkir_items,
-           COALESCE((CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) - (IFNULL(it.sum_modal,0) + IFNULL(it.sum_ongkir,0)), 0) AS laba_items,
-           (CASE WHEN ((CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) - IFNULL(tp.jml_bayar,0) - IFNULL(svu.total_voucher,0)) <= 0 
-                THEN COALESCE((CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) - (IFNULL(it.sum_modal,0) + IFNULL(it.sum_ongkir,0)), 0) ELSE 0 END) AS laba_est,
-           (CASE WHEN (IFNULL(tp.jml_bayar,0) + IFNULL(svu.total_voucher,0)) > 0 AND (CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) > 0
-                 THEN ((IFNULL(tp.jml_bayar,0) + IFNULL(svu.total_voucher,0)) / (CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END)) 
-                      * COALESCE((CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) - (IFNULL(it.sum_modal,0) + IFNULL(it.sum_ongkir,0)), 0)
-                  ELSE 0 END) AS laba_paid
-    ${baseJoin}
-    ORDER BY transaksi.id_transaksi DESC
-    ${Number(limit) > 0 ? 'LIMIT ? OFFSET ?' : ''}
-  `
-  const sqlCount = `
-    SELECT COUNT(transaksi.id_transaksi) AS total
-    FROM transaksi
-    LEFT JOIN customer ON customer.kode_customer = transaksi.kode_customer
-    LEFT JOIN admin ON admin.id = transaksi.id_marketing
-    ${whereTransaksi}
-  `
-  const sqlSum = `
-    SELECT SUM((CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END)) AS sum_fix_harga,
-           SUM(IFNULL(tp.jml_bayar,0)) AS sum_jml_bayar,
-           SUM((CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) - IFNULL(tp.jml_bayar,0) - IFNULL(svu.total_voucher,0)) AS sum_sisa_bayar,
-           SUM(IFNULL(it.sum_ongkir,0)) AS sum_ongkir_items,
-           SUM(COALESCE((CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) - (IFNULL(it.sum_modal,0) + IFNULL(it.sum_ongkir,0)), 0)) AS sum_laba_items,
-           SUM(CASE WHEN ((CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) - IFNULL(tp.jml_bayar,0) - IFNULL(svu.total_voucher,0)) <= 0 
-                     THEN COALESCE((CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) - (IFNULL(it.sum_modal,0) + IFNULL(it.sum_ongkir,0)), 0) ELSE 0 END) AS sum_laba_est,
-           SUM(CASE WHEN (IFNULL(tp.jml_bayar,0) + IFNULL(svu.total_voucher,0)) > 0 AND (CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) > 0
-                     THEN ((IFNULL(tp.jml_bayar,0) + IFNULL(svu.total_voucher,0)) / (CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END))
-                          * COALESCE((CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) - (IFNULL(it.sum_modal,0) + IFNULL(it.sum_ongkir,0)), 0)
-                     ELSE 0 END) AS sum_laba_paid
-    ${baseJoin}
-  `
-  const paramsItems = [active.tanggal_buka_buku, active.tanggal_tutup_buku]
-  const dataParams = Number(limit) > 0 ? [...paramsBase, ...paramsItems, ...paramsWhere, Number(limit), Number(offset)] : [...paramsBase, ...paramsItems, ...paramsWhere]
-  const [rows] = await pool.query(sqlData, dataParams)
-  const [countRows] = await pool.query(sqlCount, paramsWhere)
-  const [sumRows] = includeSums ? await pool.query(sqlSum, [...paramsBase, ...paramsItems, ...paramsWhere]) : [[{}]]
-  const total = Number(countRows?.[0]?.total || 0)
-  const sums = {
-    sum_fix_harga: Number(sumRows?.[0]?.sum_fix_harga || 0),
-    sum_jml_bayar: Number(sumRows?.[0]?.sum_jml_bayar || 0),
-    sum_sisa_bayar: Number(sumRows?.[0]?.sum_sisa_bayar || 0),
-    sum_ongkir_items: Number(sumRows?.[0]?.sum_ongkir_items || 0),
-    sum_laba_items: Number(sumRows?.[0]?.sum_laba_items || 0),
-    sum_laba_est: Number(sumRows?.[0]?.sum_laba_est || 0),
-    sum_laba_paid: Number(sumRows?.[0]?.sum_laba_paid || 0)
+  
+  const must = [
+    { term: { id_pembukuan: active.id_toko_tutup } },
+    { range: { tanggal_order: { gte: active.tanggal_buka_buku.toISOString().split('T')[0], lte: active.tanggal_tutup_buku.toISOString().split('T')[0] } } }
+  ]
+  
+  if (marketingId) must.push({ term: { id_marketing: marketingId } })
+  if (cabangId) must.push({ term: { id_cabang: cabangId } })
+  if (q) {
+    must.push({
+      bool: {
+        should: [
+          { wildcard: { kode_transaksi: `*${q}*` } },
+          { wildcard: { nama_customer: `*${q}*` } },
+          { wildcard: { nama_lengkap: `*${q}*` } }
+        ]
+      }
+    })
   }
-  return { data: rows, total, sums }
+  
+  if (status === 'lunas') must.push({ range: { sisa_bayar: { lte: 0 } } })
+  if (status === 'belum') must.push({ range: { sisa_bayar: { gt: 0 } } })
+
+  const body = {
+    track_total_hits: true,
+    query: { bool: { must } },
+    sort: [ { id_transaksi: { order: 'desc' } } ],
+    from: offset,
+    size: Number(limit)
+  }
+
+  if (includeSums) {
+    body.aggs = {
+      sum_fix_harga: { sum: { field: 'fix_harga' } },
+      sum_jml_bayar: { sum: { field: 'jml_bayar' } },
+      sum_sisa_bayar: { sum: { field: 'sisa_bayar' } },
+      sum_ongkir_items: { sum: { field: 'ongkir_items' } },
+      sum_laba_items: { sum: { field: 'laba_items' } },
+      sum_laba_est: { sum: { field: 'laba_est' } },
+      sum_laba_paid: { sum: { field: 'laba_paid' } }
+    }
+  }
+
+  const res = await esClient.search({
+    index: 'optik_marketing_reports',
+    body
+  })
+
+  const total = res.hits.total.value
+  const data = res.hits.hits.map(h => h._source)
+  
+  const sums = includeSums ? {
+    sum_fix_harga: res.aggregations.sum_fix_harga.value,
+    sum_jml_bayar: res.aggregations.sum_jml_bayar.value,
+    sum_sisa_bayar: res.aggregations.sum_sisa_bayar.value,
+    sum_ongkir_items: res.aggregations.sum_ongkir_items.value,
+    sum_laba_items: res.aggregations.sum_laba_items.value,
+    sum_laba_est: res.aggregations.sum_laba_est.value,
+    sum_laba_paid: res.aggregations.sum_laba_paid.value
+  } : {}
+
+  return { data, total, sums }
 }
 
 export async function fetchMarketingReportsByPaymentPeriod({ pembukuanId, marketingId, cabangId, page = 1, limit = 20, includeSums = false, q, status }) {
   const active = await getActivePembukuan(pembukuanId)
   if (!active) return { data: [], total: 0 }
+  
   const offset = Math.max(0, (Number(page) - 1) * Number(limit))
-  const paramsPeriod = [active.tanggal_buka_buku, active.tanggal_tutup_buku]
-  const paramsWhere = []
-
-  let whereTransaksi = 'WHERE 1=1'
-  if (marketingId) { whereTransaksi += ' AND transaksi.id_marketing = ?'; paramsWhere.push(marketingId) }
-  if (cabangId) { whereTransaksi += ' AND transaksi.id_cabang = ?'; paramsWhere.push(cabangId) }
-  if (q) { whereTransaksi += ' AND (transaksi.kode_transaksi LIKE ? OR customer.nama_customer LIKE ? OR admin.nama_lengkap LIKE ?)'; const like = `%${q}%`; paramsWhere.push(like, like, like) }
-  if (status === 'lunas') { whereTransaksi += ' AND ((CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) - IFNULL(tp.jml_bayar,0) - IFNULL(svu.total_voucher,0)) <= 0' }
-  if (status === 'belum') { whereTransaksi += ' AND ((CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) - IFNULL(tp.jml_bayar,0) - IFNULL(svu.total_voucher,0)) > 0' }
-  whereTransaksi += ' AND (IFNULL(tp.jml_bayar,0) + IFNULL(svu.total_voucher,0)) > 0'
-
-  const baseJoin = `
-    FROM transaksi
-    LEFT JOIN (
-      SELECT kode_transaksi, SUM(jumlah_bayar + IFNULL(bayar_lain, 0) + IFNULL(potong_marketing, 0)) AS jml_bayar,
-             MAX(jenis_transaksi) AS jenis_transaksi,
-             MAX(tanggal_bayar) AS tanggal_bayar
-      FROM transaksi_pembayaran
-      WHERE tanggal_bayar BETWEEN ? AND ?
-        AND jenis_transaksi NOT IN ('piutang')
-      GROUP BY kode_transaksi
-    ) tp ON tp.kode_transaksi = transaksi.kode_transaksi
-    LEFT JOIN (
-      SELECT kode_transaksi, SUM(voucher_use) AS total_voucher
-      FROM sponsor_voucher_use
-      GROUP BY kode_transaksi
-    ) svu ON svu.kode_transaksi = transaksi.kode_transaksi
-    LEFT JOIN (
-      SELECT id_grosir,
-             SUM(jumlah_harga) AS sum_jumlah_harga,
-             SUM(
-               CASE jenis_produk
-                 WHEN 'softlens' THEN (SELECT harga_modal FROM softlens WHERE softlens.id_softlens = transaksi_log.id_produk) * jumlah
-                 WHEN 'lensa'    THEN (SELECT harga_modal FROM lensa    WHERE lensa.id_lensa = transaksi_log.id_produk) * jumlah
-                 WHEN 'frame'    THEN (SELECT harga_modal FROM frame    WHERE frame.id_frame = transaksi_log.id_produk) * jumlah
-                 WHEN 'katalog'  THEN (SELECT harga_modal FROM produk   WHERE produk.id_produk = transaksi_log.id_produk) * jumlah
-                 ELSE 0
-               END
-              ) AS sum_modal,
-              SUM(
-                CASE jenis_produk
-                  WHEN 'softlens' THEN (SELECT harga_ongkir FROM softlens WHERE softlens.id_softlens = transaksi_log.id_produk) * jumlah
-                  WHEN 'lensa'    THEN (SELECT harga_ongkir FROM lensa    WHERE lensa.id_lensa = transaksi_log.id_produk) * jumlah
-                  WHEN 'frame'    THEN (SELECT harga_ongkir FROM frame    WHERE frame.id_frame = transaksi_log.id_produk) * jumlah
-                  WHEN 'katalog'  THEN (SELECT harga_ongkir FROM produk   WHERE produk.id_produk = transaksi_log.id_produk) * jumlah
-                  ELSE 0
-                END
-              ) AS sum_ongkir
-      FROM transaksi_log
-      GROUP BY id_grosir
-    ) it ON it.id_grosir = transaksi.kode_transaksi OR it.id_grosir = transaksi.id_transaksi
-    LEFT JOIN customer ON customer.kode_customer = transaksi.kode_customer
-    LEFT JOIN cabang_toko ON cabang_toko.id_cabang = transaksi.id_cabang
-    LEFT JOIN admin ON admin.id = transaksi.id_marketing
-    ${whereTransaksi}
-  `
-
-  const sqlData = `
-    SELECT transaksi.id_transaksi, transaksi.kode_transaksi, transaksi.tanggal_order,
-           customer.nama_customer, customer.status_user AS status_user, cabang_toko.nama_cabang, admin.nama_lengkap,
-           tp.jml_bayar, UPPER(tp.jenis_transaksi) AS jenis_transaksi_bayar,
-           IFNULL(svu.total_voucher, 0) AS total_voucher,
-           (CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) AS fix_harga,
-           ((CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) - IFNULL(tp.jml_bayar,0) - IFNULL(svu.total_voucher,0)) AS sisa_bayar,
-           IFNULL(it.sum_ongkir,0) AS ongkir_items,
-           COALESCE((CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) - (IFNULL(it.sum_modal,0) + IFNULL(it.sum_ongkir,0)), 0) AS laba_items,
-           (CASE WHEN ((CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) - IFNULL(tp.jml_bayar,0) - IFNULL(svu.total_voucher,0)) <= 0 
-                THEN COALESCE((CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) - (IFNULL(it.sum_modal,0) + IFNULL(it.sum_ongkir,0)), 0) ELSE 0 END) AS laba_est,
-           (CASE WHEN (IFNULL(tp.jml_bayar,0) + IFNULL(svu.total_voucher,0)) > 0 AND (CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) > 0
-                 THEN ((IFNULL(tp.jml_bayar,0) + IFNULL(svu.total_voucher,0)) / (CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END)) 
-                      * COALESCE((CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) - (IFNULL(it.sum_modal,0) + IFNULL(it.sum_ongkir,0)), 0)
-                  ELSE 0 END) AS laba_paid
-    ${baseJoin}
-    ORDER BY transaksi.id_transaksi DESC
-    ${Number(limit) > 0 ? 'LIMIT ? OFFSET ?' : ''}
-  `
-  const sqlCount = `
-    SELECT COUNT(transaksi.id_transaksi) AS total
-    FROM transaksi
-    LEFT JOIN (
-      SELECT kode_transaksi, SUM(jumlah_bayar + IFNULL(bayar_lain, 0) + IFNULL(potong_marketing, 0)) AS jml_bayar
-      FROM transaksi_pembayaran
-      WHERE tanggal_bayar BETWEEN ? AND ? AND jenis_transaksi NOT IN ('piutang')
-      GROUP BY kode_transaksi
-    ) tp ON tp.kode_transaksi = transaksi.kode_transaksi
-    LEFT JOIN (
-      SELECT kode_transaksi, SUM(voucher_use) AS total_voucher
-      FROM sponsor_voucher_use
-      GROUP BY kode_transaksi
-    ) svu ON svu.kode_transaksi = transaksi.kode_transaksi
-    LEFT JOIN customer ON customer.kode_customer = transaksi.kode_customer
-    LEFT JOIN admin ON admin.id = transaksi.id_marketing
-    ${whereTransaksi}
-  `
-  const sqlSum = `
-    SELECT SUM((CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END)) AS sum_fix_harga,
-           SUM(IFNULL(tp.jml_bayar,0)) AS sum_jml_bayar,
-           SUM((CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) - IFNULL(tp.jml_bayar,0) - IFNULL(svu.total_voucher,0)) AS sum_sisa_bayar,
-           SUM(IFNULL(it.sum_ongkir,0)) AS sum_ongkir_items,
-           SUM(COALESCE((CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) - (IFNULL(it.sum_modal,0) + IFNULL(it.sum_ongkir,0)), 0)) AS sum_laba_items,
-           SUM(CASE WHEN ((CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) - IFNULL(tp.jml_bayar,0) - IFNULL(svu.total_voucher,0)) <= 0 
-                     THEN COALESCE((CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) - (IFNULL(it.sum_modal,0) + IFNULL(it.sum_ongkir,0)), 0) ELSE 0 END) AS sum_laba_est,
-           SUM(CASE WHEN (IFNULL(tp.jml_bayar,0) + IFNULL(svu.total_voucher,0)) > 0 AND (CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) > 0
-                     THEN ((IFNULL(tp.jml_bayar,0) + IFNULL(svu.total_voucher,0)) / (CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END))
-                          * COALESCE((CASE WHEN (transaksi.harga_nego > 0) THEN transaksi.harga_nego ELSE transaksi.total_harga END) - (IFNULL(it.sum_modal,0) + IFNULL(it.sum_ongkir,0)), 0)
-                     ELSE 0 END) AS sum_laba_paid
-    ${baseJoin}
-  `
-  const dataParams = Number(limit) > 0 ? [...paramsPeriod, ...paramsWhere, Number(limit), Number(offset)] : [...paramsPeriod, ...paramsWhere]
-  const [rows] = await pool.query(sqlData, dataParams)
-  const [countRows] = await pool.query(sqlCount, [...paramsPeriod, ...paramsWhere])
-  const [sumRows] = includeSums ? await pool.query(sqlSum, [...paramsPeriod, ...paramsWhere]) : [[{}]]
-  const total = Number(countRows?.[0]?.total || 0)
-  const sums = {
-    sum_fix_harga: Number(sumRows?.[0]?.sum_fix_harga || 0),
-    sum_jml_bayar: Number(sumRows?.[0]?.sum_jml_bayar || 0),
-    sum_sisa_bayar: Number(sumRows?.[0]?.sum_sisa_bayar || 0),
-    sum_ongkir_items: Number(sumRows?.[0]?.sum_ongkir_items || 0),
-    sum_laba_items: Number(sumRows?.[0]?.sum_laba_items || 0),
-    sum_laba_est: Number(sumRows?.[0]?.sum_laba_est || 0),
-    sum_laba_paid: Number(sumRows?.[0]?.sum_laba_paid || 0)
+  
+  const must = [
+    { term: { id_pembukuan: active.id_toko_tutup } },
+    { range: { jml_bayar: { gt: 0 } } }
+  ]
+  
+  if (marketingId) must.push({ term: { id_marketing: marketingId } })
+  if (cabangId) must.push({ term: { id_cabang: cabangId } })
+  if (q) {
+    must.push({
+      bool: {
+        should: [
+          { wildcard: { kode_transaksi: `*${q}*` } },
+          { wildcard: { nama_customer: `*${q}*` } },
+          { wildcard: { nama_lengkap: `*${q}*` } }
+        ]
+      }
+    })
   }
-  return { data: rows, total, sums }
+  
+  if (status === 'lunas') must.push({ range: { sisa_bayar: { lte: 0 } } })
+  if (status === 'belum') must.push({ range: { sisa_bayar: { gt: 0 } } })
+
+  const body = {
+    track_total_hits: true,
+    query: { bool: { must } },
+    sort: [ { id_transaksi: { order: 'desc' } } ],
+    from: offset,
+    size: Number(limit)
+  }
+
+  if (includeSums) {
+    body.aggs = {
+      sum_fix_harga: { sum: { field: 'fix_harga' } },
+      sum_jml_bayar: { sum: { field: 'jml_bayar' } },
+      sum_sisa_bayar: { sum: { field: 'sisa_bayar' } },
+      sum_ongkir_items: { sum: { field: 'ongkir_items' } },
+      sum_laba_items: { sum: { field: 'laba_items' } },
+      sum_laba_est: { sum: { field: 'laba_est' } },
+      sum_laba_paid: { sum: { field: 'laba_paid' } }
+    }
+  }
+
+  const res = await esClient.search({
+    index: 'optik_marketing_reports',
+    body
+  })
+
+  const total = res.hits.total.value
+  const data = res.hits.hits.map(h => h._source)
+  
+  const sums = includeSums ? {
+    sum_fix_harga: res.aggregations.sum_fix_harga.value,
+    sum_jml_bayar: res.aggregations.sum_jml_bayar.value,
+    sum_sisa_bayar: res.aggregations.sum_sisa_bayar.value,
+    sum_ongkir_items: res.aggregations.sum_ongkir_items.value,
+    sum_laba_items: res.aggregations.sum_laba_items.value,
+    sum_laba_est: res.aggregations.sum_laba_est.value,
+    sum_laba_paid: res.aggregations.sum_laba_paid.value
+  } : {}
+
+  return { data, total, sums }
 }
 
 export async function fetchCollectorPayments({ pembukuanId, page = 1, limit = 20, q }) {
@@ -2618,154 +2506,120 @@ export async function fetchCustomerProfileByCode({ kode }) {
   }
 }
 
+
 export async function fetchCustomers({ page = 1, limit = 20, cabangId, marketingId, ktp, kk, aging, doc, q, addr, status, unpaid }) {
-  const offset = Math.max(0, (Number(page) - 1) * Number(limit))
-  const where = ['c_inner.kode_customer IS NOT NULL']
-  const params = []
-  
-  if (cabangId) { where.push('c_inner.cabang = ?'); params.push(cabangId) }
-  if (marketingId) { where.push('c_inner.id_marketing = ?'); params.push(marketingId) }
-  if (status === 'blacklist') { where.push('c_inner.status_user = ?'); params.push('blacklist') }
-  if (status === 'normal') { where.push('(c_inner.status_user IS NULL OR c_inner.status_user != ?)'); params.push('blacklist') }
+  const offset = Math.max(0, (Number(page) - 1) * Number(limit));
+  const must = [];
+  const must_not = [];
+
+  if (cabangId) must.push({ term: { cabang: cabangId } });
+  if (marketingId) must.push({ term: { id_marketing: marketingId } });
+  if (status === 'blacklist') must.push({ term: { status_user: 'blacklist' } });
+  if (status === 'normal') must_not.push({ term: { status_user: 'blacklist' } });
+
   if (q) {
-    const like = `%${String(q).toLowerCase()}%`
-    where.push('(LOWER(COALESCE(c_inner.nama_customer,\'\')) LIKE ? OR LOWER(COALESCE(c_inner.no_hp,\'\')) LIKE ? OR LOWER(COALESCE(c_inner.no_ktp,\'\')) LIKE ?)')
-    params.push(like, like, like)
+    must.push({
+      multi_match: {
+        query: String(q).toLowerCase(),
+        fields: ['nama_customer', 'no_hp', 'no_ktp'],
+        type: 'phrase_prefix'
+      }
+    });
   }
   if (addr) {
-    const likeAddr = `%${String(addr).toLowerCase()}%`
-    where.push('LOWER(COALESCE(c_inner.alamat_lengkap,\'\')) LIKE ?')
-    params.push(likeAddr)
+    must.push({ match: { alamat_lengkap: String(addr).toLowerCase() } });
   }
-  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
 
-  const sqlData = `
-    SELECT c.kode_customer, c.nama_customer, c.no_hp, c.no_ktp, c.status_user, c.blacklist_reason, c.alamat_lengkap,
-           cabang_toko.nama_cabang, admin.nama_lengkap AS nama_marketing,
-           c.file_ktp, c.file_kk,
-           (
-             SELECT IFNULL(SUM((CASE WHEN (t.harga_nego > 0) THEN t.harga_nego ELSE t.total_harga END) -
-              IFNULL((SELECT SUM(jumlah_bayar + IFNULL(bayar_lain,0) + IFNULL(potong_marketing,0)) FROM transaksi_pembayaran WHERE kode_transaksi = t.kode_transaksi), 0) -
-              IFNULL((SELECT SUM(voucher_use) FROM sponsor_voucher_use WHERE kode_transaksi = t.kode_transaksi), 0)), 0)
-             FROM transaksi t WHERE t.kode_customer = c.kode_customer
-           ) AS sisa_total,
-           (
-             SELECT COALESCE(MAX(CASE WHEN ((CASE WHEN (t.harga_nego > 0) THEN t.harga_nego ELSE t.total_harga END) -
-              IFNULL((SELECT SUM(jumlah_bayar + IFNULL(bayar_lain,0) + IFNULL(potong_marketing,0)) FROM transaksi_pembayaran WHERE kode_transaksi = t.kode_transaksi), 0) -
-              IFNULL((SELECT SUM(voucher_use) FROM sponsor_voucher_use WHERE kode_transaksi = t.kode_transaksi), 0)) > 0
-                    THEN TIMESTAMPDIFF(MONTH, COALESCE((SELECT MAX(tanggal_bayar) FROM transaksi_pembayaran WHERE kode_transaksi = t.kode_transaksi), t.tanggal_order), CURDATE()) ELSE 0 END), 0)
-             FROM transaksi t WHERE t.kode_customer = c.kode_customer
-           ) AS aging_months,
-           (SELECT MIN(tanggal_order) FROM transaksi WHERE kode_customer = c.kode_customer) as tanggal_register,
-           (SELECT MAX(COALESCE((SELECT MAX(tanggal_bayar) FROM transaksi_pembayaran WHERE kode_transaksi = t.kode_transaksi), t.tanggal_order)) FROM transaksi t WHERE t.kode_customer = c.kode_customer) as last_activity,
-           (SELECT tpx.jenis_transaksi 
-            FROM transaksi_pembayaran tpx 
-            INNER JOIN transaksi tx ON tx.kode_transaksi = tpx.kode_transaksi
-            WHERE tx.kode_customer = c.kode_customer
-            ORDER BY tpx.tanggal_bayar DESC, tpx.id_pembayaran DESC 
-            LIMIT 1) AS last_payment_type
-    FROM (
-        SELECT c_inner.kode_customer, c_inner.nama_customer, c_inner.no_hp, c_inner.no_ktp, c_inner.status_user, c_inner.blacklist_reason, c_inner.alamat_lengkap, c_inner.file_ktp, c_inner.file_kk, c_inner.cabang, c_inner.id_marketing, c_inner.id_customer
-        FROM customer c_inner
-        ${whereSql}
-        ORDER BY c_inner.id_customer DESC
-        ${Number(limit) > 0 ? 'LIMIT ? OFFSET ?' : ''}
-    ) c
-    LEFT JOIN cabang_toko ON cabang_toko.id_cabang = c.cabang
-    LEFT JOIN admin ON admin.id = c.id_marketing
-    ORDER BY c.id_customer DESC
-  `
-  const dataParams = Number(limit) > 0 ? [...params, Number(limit), Number(offset)] : params
-  const [rowsRaw] = await pool.query(sqlData, dataParams)
-  let rows = rowsRaw.map((r, idx) => ({
-    ...r,
-    sisa_total: Number(r.sisa_total || 0),
-    aging_months: Number(r.aging_months || 0),
-    nomor_urut: (Number(limit) > 0 ? offset : 0) + idx + 1
-  }))
+  if (doc === 'ktp') must.push({ exists: { field: 'file_ktp' } });
+  if (doc === 'kk') must.push({ exists: { field: 'file_kk' } });
+  if (doc === 'lengkap') must.push({ term: { dokumen_lengkap: true } });
   
-  if (doc === 'ktp') rows = rows.filter(r => !!r.file_ktp)
-  if (doc === 'kk') rows = rows.filter(r => !!r.file_kk)
-  if (doc === 'lengkap') rows = rows.filter(r => !!r.file_ktp && !!r.file_kk)
   if (!doc) {
-    if (ktp === 'lengkap') rows = rows.filter(r => !!r.file_ktp)
-    if (kk === 'lengkap') rows = rows.filter(r => !!r.file_kk)
+    if (ktp === 'lengkap') must.push({ exists: { field: 'file_ktp' } });
+    if (kk === 'lengkap') must.push({ exists: { field: 'file_kk' } });
   }
-  if (aging === 'gt3') rows = rows.filter(r => r.sisa_total > 0 && r.aging_months > 3)
-  if (aging === '6to12') rows = rows.filter(r => r.sisa_total > 0 && r.aging_months > 6 && r.aging_months <= 12)
-  if (aging === 'gt12') rows = rows.filter(r => r.sisa_total > 0 && r.aging_months > 12)
-  if (unpaid === '1' || unpaid === 'true') rows = rows.filter(r => r.sisa_total > 0)
-  if (unpaid === 'lunas') rows = rows.filter(r => r.sisa_total === 0)
 
-  const mapped = rows.map(r => ({
-    ...r,
-    file_ktp_url: r.file_ktp ? `https://ap2.optiklivina.com/uploads/customer_ktp/${cleanFilename(r.file_ktp)}` : null,
-    file_kk_url: r.file_kk ? `https://ap2.optiklivina.com/uploads/customer_kk/${cleanFilename(r.file_kk)}` : null
-  }))
+  if (unpaid === '1' || unpaid === 'true') must.push({ term: { status_pembayaran: 'belum_lunas' } });
+  if (unpaid === 'lunas') must.push({ term: { status_pembayaran: 'lunas' } });
 
-  const sqlCount = `
-    SELECT COUNT(c_inner.kode_customer) AS total
-    FROM customer c_inner
-    ${whereSql}
-  `
-  const [countRows] = await pool.query(sqlCount, params)
-  const total = Number(countRows?.[0]?.total || 0)
-  
-  return { data: mapped, total }
+  if (aging === 'gt3') must.push({ range: { aging_months: { gt: 3 } } });
+  if (aging === '6to12') must.push({ range: { aging_months: { gt: 6, lte: 12 } } });
+  if (aging === 'gt12') must.push({ range: { aging_months: { gt: 12 } } });
+
+  try {
+    const res = await esClient.search({
+      index: 'optik_customers',
+      from: offset,
+      size: Number(limit),
+      body: {
+        track_total_hits: true,
+        query: {
+          bool: {
+            must,
+            must_not
+          }
+        },
+        sort: [
+          { created_at: { order: 'desc' } },
+          { id_customer: { order: 'desc' } }
+        ]
+      }
+    });
+
+    const total = res.hits.total.value;
+    const mapped = res.hits.hits.map((hit, idx) => {
+      const r = hit._source;
+      return {
+        ...r,
+        sisa_total: r.sisa_hutang,
+        nomor_urut: offset + idx + 1,
+        file_ktp_url: r.file_ktp ? `https://ap2.optiklivina.com/uploads/customer_ktp/${r.file_ktp}` : null,
+        file_kk_url: r.file_kk ? `https://ap2.optiklivina.com/uploads/customer_kk/${r.file_kk}` : null
+      };
+    });
+
+    return { data: mapped, total };
+  } catch (e) {
+    console.error('[ES fetchCustomers]', e);
+    return { data: [], total: 0 };
+  }
 }
 
 export async function fetchCustomerStats({ cabangId, marketingId }) {
-  const where = ['1=1']
-  const params = []
-  if (cabangId) { where.push('cabang = ?'); params.push(cabangId) }
-  if (marketingId) { where.push('id_marketing = ?'); params.push(marketingId) }
-  const w = where.join(' AND ')
+  const must = [];
+  if (cabangId) must.push({ term: { cabang: cabangId } });
+  if (marketingId) must.push({ term: { id_marketing: marketingId } });
 
-  // Combine Total, Blacklist, and Complete Docs in one query for maximum performance
-  const [statsRows] = await pool.query(`
-    SELECT 
-      COUNT(c.kode_customer) as total,
-      SUM(CASE WHEN c.status_user = 'blacklist' THEN 1 ELSE 0 END) as blacklist,
-      SUM(CASE WHEN (c.file_ktp IS NOT NULL AND c.file_ktp <> '') AND (c.file_kk IS NOT NULL AND c.file_kk <> '') THEN 1 ELSE 0 END) as complete
-    FROM customer c 
-    WHERE ${w}
-  `, params)
-  
-  const total = Number(statsRows?.[0]?.total || 0)
-  const blacklist = Number(statsRows?.[0]?.blacklist || 0)
-  const complete = Number(statsRows?.[0]?.complete || 0)
+  try {
+    const res = await esClient.search({
+      index: 'optik_customers',
+      size: 0,
+      body: {
+        track_total_hits: true,
+        query: { bool: { must } },
+        aggs: {
+          blacklist: { filter: { term: { status_user: 'blacklist' } } },
+          complete: { filter: { term: { dokumen_lengkap: true } } },
+          unpaid: { filter: { term: { status_pembayaran: 'belum_lunas' } } },
+          lunas: { filter: { term: { status_pembayaran: 'lunas' } } }
+        }
+      }
+    });
 
-  const whereCustomer = ['c.kode_customer IS NOT NULL']
-  const paramsUnpaid = []
-  if (cabangId) { whereCustomer.push('c.cabang = ?'); paramsUnpaid.push(cabangId) }
-  if (marketingId) { whereCustomer.push('c.id_marketing = ?'); paramsUnpaid.push(marketingId) }
-
-  const [unpaidRows] = await pool.query(`
-    SELECT COUNT(DISTINCT c.kode_customer) as cnt
-    FROM customer c
-    JOIN transaksi t ON t.kode_customer = c.kode_customer
-    LEFT JOIN (
-      SELECT kode_transaksi, SUM(jumlah_bayar + IFNULL(bayar_lain,0) + IFNULL(potong_marketing,0)) AS jml_bayar
-      FROM transaksi_pembayaran
-      GROUP BY kode_transaksi
-    ) tp ON tp.kode_transaksi = t.kode_transaksi
-    LEFT JOIN (
-      SELECT kode_transaksi, SUM(voucher_use) AS total_voucher
-      FROM sponsor_voucher_use
-      GROUP BY kode_transaksi
-    ) svu ON svu.kode_transaksi = t.kode_transaksi
-    WHERE c.kode_customer IS NOT NULL 
-      ${paramsUnpaid.length ? 'AND ' + whereCustomer.slice(1).join(' AND ') : ''}
-      AND (
-        (CASE WHEN (t.harga_nego > 0) THEN t.harga_nego ELSE t.total_harga END) -
-        IFNULL(tp.jml_bayar, 0) -
-        IFNULL(svu.total_voucher, 0)
-      ) > 0
-  `, paramsUnpaid)
-  const unpaid = Number(unpaidRows?.[0]?.cnt || 0)
-  const lunas = total - unpaid
-
-  return { total, blacklist, complete, unpaid, lunas }
+    const total = res.hits.total.value;
+    const aggs = res.aggregations;
+    
+    return {
+      total,
+      blacklist: aggs.blacklist.doc_count,
+      complete: aggs.complete.doc_count,
+      unpaid: aggs.unpaid.doc_count,
+      lunas: aggs.lunas.doc_count
+    };
+  } catch (e) {
+    console.error('[ES fetchCustomerStats]', e);
+    return { total: 0, blacklist: 0, complete: 0, unpaid: 0, lunas: 0 };
+  }
 }
 
 

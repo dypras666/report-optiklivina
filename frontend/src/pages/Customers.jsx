@@ -97,17 +97,8 @@ export default function Customers() {
   async function handlePreviewImage(url, title) {
     if (!url) return
     try {
-      // Revoke old blob URL if exists
-      if (previewImage.url && previewImage.url.startsWith('blob:')) {
-        URL.revokeObjectURL(previewImage.url)
-      }
-
       const fullUrl = url.startsWith('http') ? url : `${API_BASE}${url}`
-      const res = await fetch(fullUrl)
-      if (!res.ok) throw new Error('Gagal mengambil gambar')
-      const blob = await res.blob()
-      const blobUrl = URL.createObjectURL(blob)
-      setPreviewImage({ url: blobUrl, title, open: true })
+      setPreviewImage({ url: fullUrl, title, open: true })
     } catch (e) {
       console.error(e)
       alert('Gagal memuat gambar: ' + e.message)

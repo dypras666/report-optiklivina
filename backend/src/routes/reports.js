@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { fetchOmsetToko, fetchProfitLossDetails, fetchBestCustomers, fetchBestCustomersV2, fetchPointUsage } from '../services/reportsService.js'
 import { fetchProfitLossReport, fetchProfitLossByCabang, upsertProfitLossToSupabase, fetchProfitLossFromSupabase, compareWithPrevious } from '../services/profitLossService.js'
+import { getAnalysisMarketingES } from '../services/analysisMarketingService.js'
 import customersRouter from './customers.js'
 import marketingRouter from './marketing.js'
 import tokoRouter from './toko.js'
@@ -11,6 +12,20 @@ router.use('/', customersRouter)
 router.use('/', marketingRouter)
 router.use('/', tokoRouter)
 router.use('/', asetRouter)
+
+router.get('/analysis-marketing/es', async (req, res) => {
+  try {
+    const pembukuanId = req.query.pembukuan_id ? parseInt(req.query.pembukuan_id, 10) : undefined
+    const marketingId = req.query.marketingId ? parseInt(req.query.marketingId, 10) : undefined
+    if (!marketingId) return res.status(400).json({ error: 'marketingId is required' })
+    const data = await getAnalysisMarketingES({ marketingId, pembukuanId })
+    res.json({ result: data })
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ error: e.message })
+  }
+})
+
 
 // Compatibility route used by frontend for omset in reports base
 router.get('/omset-toko', async (req, res) => {

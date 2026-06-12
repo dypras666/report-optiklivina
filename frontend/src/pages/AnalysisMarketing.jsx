@@ -38,17 +38,21 @@ export default function AnalysisMarketing() {
     if (!marketing) return
     setLoading(true)
     try {
-      const qRes = await fetch(`${API_BASE}/api/jobs/queue`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'analysisMarketing', payload: { marketingId: Number(marketing) } })
-      })
-      const qJson = await qRes.json()
-      const jobId = qJson.id
-      alert('Sedang diproses di background, notifikasi akan muncul saat siap')
+      const res = await fetch(`${API_BASE}/api/reports/analysis-marketing/es?marketingId=${marketing}`)
+      const json = await res.json()
+      if (json.error) throw new Error(json.error)
+      
+      const result = json.result || {}
+      setSummary(result.summary?.data?.[0] || null)
+      setItems((result.transactions && Array.isArray(result.transactions.data)) ? result.transactions.data : (result.transactions || []))
+      setDist(result.distribution || { qty_kacamata: 0, qty_ganti_lensa: 0, qty_ganti_frame: 0, qty_softlens: 0, qty_lensa: 0 })
+      setCompletenessData(result.completeness || { percent: 0, missing: { no_hp: 0, alamat_lengkap: 0, file_ktp_url: 0, file_kk_url: 0 } })
+      setProdItems(result.items || [])
+      setMonthlyTrans(result.monthly || [])
+      setAllTrans(result.allTransactions || [])
     } catch (e) {
       console.error(e)
-      alert('Gagal memproses laporan')
+      alert('Gagal memuat laporan')
     } finally {
       setLoading(false)
     }
@@ -65,7 +69,7 @@ export default function AnalysisMarketing() {
       if (mkId) { setMarketing(mkId) }
       setSummary(result.summary?.data?.[0] || null)
       setItems((result.transactions && Array.isArray(result.transactions.data)) ? result.transactions.data : (result.transactions || []))
-      setDist(result.distribution || { qty_kacamata: 0, qty_ganti_lensa: 0, qty_ganti_frame: 0, qty_softlens: 0 })
+      setDist(result.distribution || { qty_kacamata: 0, qty_ganti_lensa: 0, qty_ganti_frame: 0, qty_softlens: 0, qty_lensa: 0 })
       setCompletenessData(result.completeness || { percent: 0, missing: { no_hp: 0, alamat_lengkap: 0, file_ktp_url: 0, file_kk_url: 0 } })
       setProdItems(result.items || [])
       setMonthlyTrans(result.monthly || [])
