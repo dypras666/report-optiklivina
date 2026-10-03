@@ -115,6 +115,8 @@ export default function MasterItems({ jenis }){
               <th className="p-2 text-left">SKU</th>
               <th className="p-2 text-right">Modal</th>
               <th className="p-2 text-right">Jual</th>
+              <th className="p-2 text-right">Paket</th>
+              <th className="p-2 text-center">Diskon</th>
               <th className="p-2 text-right">Stok</th>
               <th className="p-2 text-right">Terjual (Qty)</th>
               <th className="p-2 text-right">Terjual (Rp)</th>
@@ -123,7 +125,7 @@ export default function MasterItems({ jenis }){
           </thead>
           <tbody>
             {loading ? (
-              <TableBodySkeleton rows={10} cols={9} />
+              <TableBodySkeleton rows={10} cols={11} />
             ) : (
               <>
                 {rows.map((r, idx) => (
@@ -139,6 +141,18 @@ export default function MasterItems({ jenis }){
                     <td className="p-2 font-mono text-xs">{r.sku}</td>
                     <td className="p-2 text-right">{fmtCurrency(r.harga_modal)}</td>
                     <td className="p-2 text-right font-semibold">{fmtCurrency(r.harga_jual)}</td>
+                    <td className="p-2 text-right font-medium text-purple-700">
+                      {Number(r.harga_paket) > 0 ? fmtCurrency(r.harga_paket) : <span className="text-slate-400 font-normal">-</span>}
+                    </td>
+                    <td className="p-2 text-center">
+                      {r.diskon && r.diskon !== '-' && r.diskon !== '0' ? (
+                        <span className="bg-red-50 text-red-600 font-bold px-2 py-0.5 rounded text-xs border border-red-200 inline-block whitespace-nowrap">
+                          {r.diskon}
+                        </span>
+                      ) : (
+                        <span className="text-slate-400 text-xs">-</span>
+                      )}
+                    </td>
                     <td className="p-2 text-right">
                       {(() => {
                         const bStocks = r.branch_stocks ? r.branch_stocks.split(',') : [];
@@ -186,7 +200,7 @@ export default function MasterItems({ jenis }){
                   </tr>
                 ))}
                 {rows.length===0 && (
-                  <tr><td className="p-3 text-center" colSpan={9}>Tidak ada data</td></tr>
+                  <tr><td className="p-3 text-center" colSpan={11}>Tidak ada data</td></tr>
                 )}
               </>
             )}

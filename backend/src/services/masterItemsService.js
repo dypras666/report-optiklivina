@@ -95,6 +95,8 @@ export async function fetchMasterItemsES({ jenis, page = 1, limit = 20, q, statu
       sku: src.sku,
       harga_modal: src.harga_modal,
       harga_jual: src.harga_jual,
+      harga_paket: src.harga_paket || 0,
+      diskon: src.diskon || '-',
       status: src.status,
       total_qty: src.total_qty,
       total_uang: src.total_uang,

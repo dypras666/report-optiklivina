@@ -27,6 +27,8 @@ async function setupIndex() {
           sku: { type: 'keyword' },
           harga_modal: { type: 'long' },
           harga_jual: { type: 'long' },
+          harga_paket: { type: 'long' },
+          diskon: { type: 'keyword' },
           status: { type: 'integer' }, // 1 or 0
           total_qty: { type: 'long' },
           total_uang: { type: 'long' },
@@ -54,7 +56,7 @@ async function fetchStatusMap(jenis) {
 
 async function syncKatalog() {
   console.log('[ES Products Sync] Syncing Katalog (produk)...');
-  const [rows] = await pool.query('SELECT id_produk, nama_produk, sku_katalog, harga_modal, harga_jual FROM produk');
+  const [rows] = await pool.query('SELECT id_produk, nama_produk, sku_katalog, harga_modal, harga_jual, harga_paket, diskon FROM produk');
   
   const [stokRows] = await pool.query('SELECT id_produk, id_cabang, SUM(stok) as sum_stok FROM produk_stok_cabang GROUP BY id_produk, id_cabang');
   const stokMap = new Map();
@@ -90,6 +92,8 @@ async function syncKatalog() {
       sku: r.sku_katalog || '',
       harga_modal: Number(r.harga_modal || 0),
       harga_jual: Number(r.harga_jual || 0),
+      harga_paket: Number(r.harga_paket || 0),
+      diskon: r.diskon ? String(r.diskon).trim() : '-',
       status: status,
       total_qty: agg.qty,
       total_uang: agg.uang,
@@ -101,7 +105,7 @@ async function syncKatalog() {
 
 async function syncSoftlens() {
   console.log('[ES Products Sync] Syncing Softlens...');
-  const [rows] = await pool.query('SELECT id_softlens, nama_softlens, sku_softlens, harga_modal, harga_jual FROM softlens');
+  const [rows] = await pool.query('SELECT id_softlens, nama_softlens, sku_softlens, harga_modal, harga_jual, harga_paket, diskon FROM softlens');
   
   const [stokRows] = await pool.query('SELECT id_softlens, id_cabang, SUM(stok) as sum_stok FROM softlens_stok_cabang GROUP BY id_softlens, id_cabang');
   const stokMap = new Map();
@@ -136,6 +140,8 @@ async function syncSoftlens() {
       sku: r.sku_softlens || '',
       harga_modal: Number(r.harga_modal || 0),
       harga_jual: Number(r.harga_jual || 0),
+      harga_paket: Number(r.harga_paket || 0),
+      diskon: r.diskon ? String(r.diskon).trim() : '-',
       status: status,
       total_qty: agg.qty,
       total_uang: agg.uang,
@@ -148,7 +154,7 @@ async function syncSoftlens() {
 async function syncFrame() {
   console.log('[ES Products Sync] Syncing Frame...');
   const [rows] = await pool.query(`
-    SELECT f.id_frame, fk.nama_frame, f.sku_frame, f.harga_modal, f.harga_jual 
+    SELECT f.id_frame, fk.nama_frame, f.sku_frame, f.harga_modal, f.harga_jual, f.harga_paket, f.diskon 
     FROM frame f 
     LEFT JOIN frame_kat fk ON fk.id_kat_frame = f.id_kat_frame
   `);
@@ -186,6 +192,8 @@ async function syncFrame() {
       sku: r.sku_frame || '',
       harga_modal: Number(r.harga_modal || 0),
       harga_jual: Number(r.harga_jual || 0),
+      harga_paket: Number(r.harga_paket || 0),
+      diskon: r.diskon ? String(r.diskon).trim() : '-',
       status: status,
       total_qty: agg.qty,
       total_uang: agg.uang,
@@ -198,7 +206,7 @@ async function syncFrame() {
 async function syncLensa() {
   console.log('[ES Products Sync] Syncing Lensa...');
   const [rows] = await pool.query(`
-    SELECT l.id_lensa, lk.nama_lensa_kat, l.size, l.sku_lensa, l.harga_modal, l.harga_jual 
+    SELECT l.id_lensa, lk.nama_lensa_kat, l.size, l.sku_lensa, l.harga_modal, l.harga_jual, l.harga_paket, l.diskon 
     FROM lensa l
     LEFT JOIN lensa_kat lk ON lk.id_lensa_kat = l.id_lensa_kat
   `);
@@ -236,6 +244,8 @@ async function syncLensa() {
       sku: r.sku_lensa || '',
       harga_modal: Number(r.harga_modal || 0),
       harga_jual: Number(r.harga_jual || 0),
+      harga_paket: Number(r.harga_paket || 0),
+      diskon: r.diskon ? String(r.diskon).trim() : '-',
       status: status,
       total_qty: agg.qty,
       total_uang: agg.uang,
