@@ -12,12 +12,14 @@ export async function fetchMasterItemsES({ jenis, page = 1, limit = 20, q, statu
   ]
   
   if (q) {
+    const rawQ = String(q).trim()
     mustFilters.push({
       bool: {
         should: [
-          { wildcard: { nama: `*${String(q).toLowerCase()}*` } },
-          { wildcard: { sku: `*${String(q).toLowerCase()}*` } },
-          { term: { id: String(q) } }
+          { wildcard: { nama: { value: `*${rawQ}*`, case_insensitive: true } } },
+          { wildcard: { sku: { value: `*${rawQ}*`, case_insensitive: true } } },
+          { term: { sku: { value: rawQ, case_insensitive: true } } },
+          { term: { id: rawQ } }
         ],
         minimum_should_match: 1
       }
