@@ -13,14 +13,17 @@ export async function fetchMasterItemsES({ jenis, page = 1, limit = 20, q, statu
   
   if (q) {
     const rawQ = String(q).trim()
+    const shouldConditions = [
+      { wildcard: { nama: { value: `*${rawQ}*`, case_insensitive: true } } },
+      { wildcard: { sku: { value: `*${rawQ}*`, case_insensitive: true } } },
+      { term: { sku: { value: rawQ, case_insensitive: true } } }
+    ]
+    if (!isNaN(rawQ) && rawQ !== '') {
+      shouldConditions.push({ term: { id: Number(rawQ) } })
+    }
     mustFilters.push({
       bool: {
-        should: [
-          { wildcard: { nama: { value: `*${rawQ}*`, case_insensitive: true } } },
-          { wildcard: { sku: { value: `*${rawQ}*`, case_insensitive: true } } },
-          { term: { sku: { value: rawQ, case_insensitive: true } } },
-          { term: { id: rawQ } }
-        ],
+        should: shouldConditions,
         minimum_should_match: 1
       }
     })

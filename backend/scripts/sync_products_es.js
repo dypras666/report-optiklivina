@@ -25,12 +25,14 @@ async function setupIndex() {
       },
       mappings: {
         properties: {
-          id: { type: 'keyword' },
+          id: { type: 'long' },
           jenis: { type: 'keyword' }, // katalog, softlens, frame, lensa
           nama: { type: 'text', fields: { keyword: { type: 'keyword', ignore_above: 256 } } },
           sku: { type: 'keyword' },
           harga_modal: { type: 'long' },
           harga_jual: { type: 'long' },
+          harga_paket: { type: 'long' },
+          diskon: { type: 'keyword' },
           status: { type: 'integer' }, // 1 or 0
           total_qty: { type: 'long' },
           total_uang: { type: 'long' },
@@ -58,7 +60,7 @@ async function fetchStatusMap(jenis) {
 
 async function syncKatalog() {
   console.log('[ES Products Sync] Syncing Katalog (produk)...');
-  const [rows] = await pool.query('SELECT id_produk, nama_produk, sku_katalog, harga_modal, harga_jual FROM produk');
+  const [rows] = await pool.query('SELECT id_produk, nama_produk, sku_katalog, harga_modal, harga_jual, harga_paket, diskon FROM produk');
   
   const [stokRows] = await pool.query('SELECT id_produk, id_cabang, SUM(stok) as sum_stok FROM produk_stok_cabang GROUP BY id_produk, id_cabang');
   const stokMap = new Map();
@@ -80,20 +82,22 @@ async function syncKatalog() {
   const statusMap = await fetchStatusMap('katalog');
 
   return rows.map(r => {
-    const id = String(r.id_produk);
-    const stokCabang = stokMap.get(id) || [];
+    const id = Number(r.id_produk);
+    const stokCabang = stokMap.get(String(id)) || [];
     const totalStok = stokCabang.reduce((acc, curr) => acc + curr.stok, 0);
-    const agg = aggMap.get(id) || { qty: 0, uang: 0 };
-    const status = statusMap.has(id) ? statusMap.get(id) : 1;
+    const agg = aggMap.get(String(id)) || { qty: 0, uang: 0 };
+    const status = statusMap.has(String(id)) ? statusMap.get(String(id)) : 1;
 
     return {
       _id: `katalog_${id}`,
       id: id,
       jenis: 'katalog',
-      nama: r.nama_produk || '',
-      sku: r.sku_katalog || '',
+      nama: (r.nama_produk || '').trim() || `Katalog #${id}`,
+      sku: (r.sku_katalog || '').trim() || `KAT-${id}`,
       harga_modal: Number(r.harga_modal || 0),
       harga_jual: Number(r.harga_jual || 0),
+      harga_paket: Number(r.harga_paket || 0),
+      diskon: r.diskon ? String(r.diskon).trim() : '-',
       status: status,
       total_qty: agg.qty,
       total_uang: agg.uang,
@@ -105,7 +109,7 @@ async function syncKatalog() {
 
 async function syncSoftlens() {
   console.log('[ES Products Sync] Syncing Softlens...');
-  const [rows] = await pool.query('SELECT id_softlens, nama_softlens, sku_softlens, harga_modal, harga_jual FROM softlens');
+  const [rows] = await pool.query('SELECT id_softlens, nama_softlens, sku_softlens, harga_modal, harga_jual, harga_paket, diskon FROM softlens');
   
   const [stokRows] = await pool.query('SELECT id_softlens, id_cabang, SUM(stok) as sum_stok FROM softlens_stok_cabang GROUP BY id_softlens, id_cabang');
   const stokMap = new Map();
@@ -126,20 +130,22 @@ async function syncSoftlens() {
   const statusMap = await fetchStatusMap('softlens');
 
   return rows.map(r => {
-    const id = String(r.id_softlens);
-    const stokCabang = stokMap.get(id) || [];
+    const id = Number(r.id_softlens);
+    const stokCabang = stokMap.get(String(id)) || [];
     const totalStok = stokCabang.reduce((acc, curr) => acc + curr.stok, 0);
-    const agg = aggMap.get(id) || { qty: 0, uang: 0 };
-    const status = statusMap.has(id) ? statusMap.get(id) : 1;
+    const agg = aggMap.get(String(id)) || { qty: 0, uang: 0 };
+    const status = statusMap.has(String(id)) ? statusMap.get(String(id)) : 1;
 
     return {
       _id: `softlens_${id}`,
       id: id,
       jenis: 'softlens',
-      nama: r.nama_softlens || '',
-      sku: r.sku_softlens || '',
+      nama: (r.nama_softlens || '').trim() || `Softlens #${id}`,
+      sku: (r.sku_softlens || '').trim() || `SFT-${id}`,
       harga_modal: Number(r.harga_modal || 0),
       harga_jual: Number(r.harga_jual || 0),
+      harga_paket: Number(r.harga_paket || 0),
+      diskon: r.diskon ? String(r.diskon).trim() : '-',
       status: status,
       total_qty: agg.qty,
       total_uang: agg.uang,
@@ -152,7 +158,7 @@ async function syncSoftlens() {
 async function syncFrame() {
   console.log('[ES Products Sync] Syncing Frame...');
   const [rows] = await pool.query(`
-    SELECT f.id_frame, fk.nama_frame, f.sku_frame, f.harga_modal, f.harga_jual 
+    SELECT f.id_frame, f.kode_frame, fk.nama_frame, f.sku_frame, f.harga_modal, f.harga_jual, f.harga_paket, f.diskon 
     FROM frame f 
     LEFT JOIN frame_kat fk ON fk.id_kat_frame = f.id_kat_frame
   `);
@@ -175,34 +181,53 @@ async function syncFrame() {
 
   const statusMap = await fetchStatusMap('frame');
 
-  return rows.map(r => {
-    const id = String(r.id_frame);
-    const stokCabang = stokMap.get(id) || [];
+  const docs = [];
+  for (const r of rows) {
+    const id = Number(r.id_frame);
+    const stokCabang = stokMap.get(String(id)) || [];
     const totalStok = stokCabang.reduce((acc, curr) => acc + curr.stok, 0);
-    const agg = aggMap.get(id) || { qty: 0, uang: 0 };
-    const status = statusMap.has(id) ? statusMap.get(id) : 1;
+    const agg = aggMap.get(String(id)) || { qty: 0, uang: 0 };
+    const status = statusMap.has(String(id)) ? statusMap.get(String(id)) : 1;
 
-    return {
+    const rawNama = (r.nama_frame || '').trim();
+    const rawKode = (r.kode_frame || '').trim();
+    const rawSku = (r.sku_frame || '').trim();
+    const hargaModal = Number(r.harga_modal || 0);
+    const hargaJual = Number(r.harga_jual || 0);
+
+    // Skip empty dummy/ghost frames from 2018 that have no metadata, 0 price, 0 stock, and 0 sales
+    if (!rawNama && !rawSku && hargaModal === 0 && hargaJual === 0 && totalStok === 0 && agg.qty === 0) {
+      continue;
+    }
+
+    const nama = rawNama || (rawKode ? `Frame ${rawKode}` : (rawSku ? `Frame ${rawSku}` : `Frame #${id}`));
+    const sku = rawSku || rawKode || `FRM-${id}`;
+
+    docs.push({
       _id: `frame_${id}`,
       id: id,
       jenis: 'frame',
-      nama: r.nama_frame || '',
-      sku: r.sku_frame || '',
-      harga_modal: Number(r.harga_modal || 0),
-      harga_jual: Number(r.harga_jual || 0),
+      nama: nama,
+      sku: sku,
+      harga_modal: hargaModal,
+      harga_jual: hargaJual,
+      harga_paket: Number(r.harga_paket || 0),
+      diskon: r.diskon ? String(r.diskon).trim() : '-',
       status: status,
       total_qty: agg.qty,
       total_uang: agg.uang,
       total_stok: totalStok,
       stok_cabang: stokCabang
-    };
-  });
+    });
+  }
+
+  return docs;
 }
 
 async function syncLensa() {
   console.log('[ES Products Sync] Syncing Lensa...');
   const [rows] = await pool.query(`
-    SELECT l.id_lensa, lk.nama_lensa_kat, l.size, l.sku_lensa, l.harga_modal, l.harga_jual 
+    SELECT l.id_lensa, lk.nama_lensa_kat, l.size, l.sku_lensa, l.harga_modal, l.harga_jual, l.harga_paket, l.diskon 
     FROM lensa l
     LEFT JOIN lensa_kat lk ON lk.id_lensa_kat = l.id_lensa_kat
   `);
@@ -226,20 +251,24 @@ async function syncLensa() {
   const statusMap = await fetchStatusMap('lensa');
 
   return rows.map(r => {
-    const id = String(r.id_lensa);
-    const stokCabang = stokMap.get(id) || [];
+    const id = Number(r.id_lensa);
+    const stokCabang = stokMap.get(String(id)) || [];
     const totalStok = stokCabang.reduce((acc, curr) => acc + curr.stok, 0);
-    const agg = aggMap.get(id) || { qty: 0, uang: 0 };
-    const status = statusMap.has(id) ? statusMap.get(id) : 1;
+    const agg = aggMap.get(String(id)) || { qty: 0, uang: 0 };
+    const status = statusMap.has(String(id)) ? statusMap.get(String(id)) : 1;
+
+    const namePart = (r.nama_lensa_kat ? `${r.nama_lensa_kat} ${r.size || ''}`.trim() : '');
 
     return {
       _id: `lensa_${id}`,
       id: id,
       jenis: 'lensa',
-      nama: (r.nama_lensa_kat ? `${r.nama_lensa_kat} ${r.size || ''}`.trim() : ''),
-      sku: r.sku_lensa || '',
+      nama: namePart || `Lensa #${id}`,
+      sku: (r.sku_lensa || '').trim() || `LNS-${id}`,
       harga_modal: Number(r.harga_modal || 0),
       harga_jual: Number(r.harga_jual || 0),
+      harga_paket: Number(r.harga_paket || 0),
+      diskon: r.diskon ? String(r.diskon).trim() : '-',
       status: status,
       total_qty: agg.qty,
       total_uang: agg.uang,
@@ -249,7 +278,7 @@ async function syncLensa() {
   });
 }
 
-async function run() {
+async function main() {
   try {
     const isConnected = await checkESConnection()
     if (!isConnected) {
@@ -292,9 +321,9 @@ async function run() {
     console.log('[ES Products Sync] All done! Products are searchable via Elasticsearch now.')
     process.exit(0)
   } catch (err) {
-    console.error(err)
+    console.error('[ES Products Sync] Error during sync:', err)
     process.exit(1)
   }
 }
 
-run()
+main()
