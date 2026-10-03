@@ -3790,6 +3790,16 @@ export async function upsertAssetStatus({ jenis, productId, status }) {
   if (!jenis || !pid) throw new Error('jenis and productId are required')
   await pool.query('REPLACE INTO asset_status (jenis, product_id, status, updated_at) VALUES (?,?,?,?)', [String(jenis), pid, st, Date.now()])
   try { asetCache.single.clear(); asetCache.idle.clear(); asetCache.idleAll.clear(); asetCache.all = { ts: 0, includeIdle: false, data: null } } catch { }
+  try {
+    await esClient.update({
+      index: 'optik_products',
+      id: `${jenis}_${pid}`,
+      doc: { status: st },
+      refresh: 'wait_for'
+    })
+  } catch (e) {
+    console.warn(`[ES AssetStatus] Failed to update status in ES for ${jenis}_${pid}:`, e.message)
+  }
   return { jenis, productId: pid, status: st }
 }
 
