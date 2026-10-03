@@ -315,6 +315,50 @@ router.post('/marketing-users/toggle-all', async (req, res) => {
   }
 })
 
+// Get all store employees (Semua Akun Pegawai Toko) with optional search
+router.get('/users', async (req, res) => {
+  try {
+    const { search, group_id, branch_id } = req.query
+    let query = `
+      SELECT u.id, u.username, u.email, u.first_name, u.last_name, u.id_cabang, ct.nama_cabang,
+             ug.group_id, g.name AS group_name,
+             u.status_show_modal, u.status_show_diskon, u.status_show_harga_cabang,
+             g.status_show_modal AS role_modal,
+             g.status_show_diskon AS role_diskon,
+             g.status_show_harga_cabang AS role_harga_cabang,
+             COALESCE(u.status_show_modal, g.status_show_modal, 0) AS effective_modal,
+             COALESCE(u.status_show_diskon, g.status_show_diskon, 1) AS effective_diskon,
+             COALESCE(u.status_show_harga_cabang, g.status_show_harga_cabang, 0) AS effective_harga_cabang
+      FROM users u
+      LEFT JOIN users_groups ug ON ug.user_id = u.id
+      LEFT JOIN groups g ON g.id = ug.group_id
+      LEFT JOIN cabang_toko ct ON ct.id_cabang = u.id_cabang
+      WHERE u.active = 1
+    `
+    const params = []
+    if (group_id) {
+      query += ` AND ug.group_id = ?`
+      params.push(group_id)
+    }
+    if (branch_id) {
+      query += ` AND u.id_cabang = ?`
+      params.push(branch_id)
+    }
+    if (search) {
+      query += ` AND (u.first_name LIKE ? OR u.last_name LIKE ? OR u.email LIKE ? OR u.username LIKE ? OR ct.nama_cabang LIKE ? OR g.name LIKE ?)`
+      const s = `%${search}%`
+      params.push(s, s, s, s, s, s)
+    }
+    query += ` ORDER BY ct.nama_cabang ASC, g.name ASC, u.first_name ASC`
+
+    const [rows] = await pool.query(query, params)
+    res.json({ success: true, data: rows })
+  } catch (error) {
+    console.error('[MANAGEMENT] getAllUsers error:', error)
+    res.status(500).json({ success: false, error: 'Gagal mengambil data akun pegawai' })
+  }
+})
+
 // Get users by group/role ID (Akun Pegawai / Cabang per Role)
 router.get('/groups/:id/users', async (req, res) => {
   try {
@@ -420,6 +464,28 @@ router.post('/users/toggle-all', async (req, res) => {
   } catch (error) {
     console.error('[MANAGEMENT] toggleUsersAll error:', error)
     res.status(500).json({ success: false, error: 'Gagal mengubah status semua akun' })
+  }
+})
+
+// Toggle all active store users globally for a specific field ('modal', 'diskon', 'hargaCabang')
+router.post('/users/toggle-all-master', async (req, res) => {
+  try {
+    const { field, status } = req.body
+    if (!field || status === undefined) {
+      return res.status(400).json({ success: false, error: 'field dan status diperlukan' })
+    }
+    const columnMap = {
+      modal: 'status_show_modal',
+      diskon: 'status_show_diskon',
+      hargaCabang: 'status_show_harga_cabang'
+    }
+    const col = columnMap[field]
+    if (!col) return res.status(400).json({ success: false, error: 'field tidak valid' })
+    await pool.query(`UPDATE users SET ${col} = ? WHERE active = 1`, [status])
+    res.json({ success: true, message: `Status ${field} semua pegawai toko berhasil diubah` })
+  } catch (error) {
+    console.error('[MANAGEMENT] toggleAllMasterUsers error:', error)
+    res.status(500).json({ success: false, error: 'Gagal mengubah status semua pegawai' })
   }
 })
 

@@ -1,5 +1,20 @@
 import React, { useState, useEffect } from 'react'
-import { Search, Users, UserCheck, Shield, CheckCircle2, AlertCircle, Loader2, CheckSquare, ChevronDown, ChevronRight, User } from 'lucide-react'
+import { 
+  Search, 
+  Users, 
+  UserCheck, 
+  Shield, 
+  CheckCircle2, 
+  AlertCircle, 
+  Loader2, 
+  ChevronDown, 
+  ChevronRight, 
+  User, 
+  Filter, 
+  Building, 
+  RotateCcw,
+  Sparkles
+} from 'lucide-react'
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'https://reportsapi.optiklivina.com'
 
@@ -63,12 +78,16 @@ function ColumnHeaderWithChecklist({ label, field, isChecked, onToggleAll }) {
 }
 
 export default function ManagementPosisi() {
-  const [activeTab, setActiveTab] = useState('posisi') // 'posisi' | 'marketing'
+  const [activeTab, setActiveTab] = useState('posisi') // 'posisi' | 'pegawai' | 'marketing'
   const [posisiList, setPosisiList] = useState([])
   const [marketingList, setMarketingList] = useState([])
+  const [allUsers, setAllUsers] = useState([])
   const [loading, setLoading] = useState(true)
   const [updatingId, setUpdatingId] = useState(null)
   const [searchTerm, setSearchTerm] = useState('')
+  const [userSearchTerms, setUserSearchTerms] = useState({}) // per group inside accordion
+  const [selectedCabangFilter, setSelectedCabangFilter] = useState('')
+  const [selectedPosisiFilter, setSelectedPosisiFilter] = useState('')
   const [toast, setToast] = useState(null)
   const [expandedGroupId, setExpandedGroupId] = useState(null)
   const [groupUsers, setGroupUsers] = useState({})
@@ -113,9 +132,24 @@ export default function ManagementPosisi() {
     }
   }
 
+  const fetchAllUsers = async () => {
+    try {
+      const tok = localStorage.getItem('authToken')
+      const res = await fetch(`${API_BASE}/api/management/users`, {
+        headers: { 'Authorization': `Bearer ${tok}` }
+      })
+      const json = await res.json()
+      if (json.success) {
+        setAllUsers(json.data)
+      }
+    } catch (error) {
+      console.error('Error fetching all users:', error)
+    }
+  }
+
   const loadData = async () => {
     setLoading(true)
-    await Promise.all([fetchPosisi(), fetchMarketingUsers()])
+    await Promise.all([fetchPosisi(), fetchMarketingUsers(), fetchAllUsers()])
     setLoading(false)
   }
 
@@ -125,14 +159,28 @@ export default function ManagementPosisi() {
 
   // Check if all rows in current tab have the field enabled
   const isAllChecked = (field) => {
-    const list = activeTab === 'posisi' ? posisiList : marketingList
-    if (!list || list.length === 0) return false
-    const key = field === 'modal' ? 'status_show_modal' : field === 'diskon' ? 'status_show_diskon' : 'status_show_harga_cabang'
-    return list.every(item => item[key] === 1)
+    if (activeTab === 'posisi') {
+      if (!posisiList || posisiList.length === 0) return false
+      const key = field === 'modal' ? 'status_show_modal' : field === 'diskon' ? 'status_show_diskon' : 'status_show_harga_cabang'
+      return posisiList.every(item => item[key] === 1)
+    } else if (activeTab === 'pegawai') {
+      if (!allUsers || allUsers.length === 0) return false
+      const key = field === 'modal' ? 'effective_modal' : field === 'diskon' ? 'effective_diskon' : 'effective_harga_cabang'
+      return allUsers.every(item => item[key] === 1)
+    } else {
+      if (!marketingList || marketingList.length === 0) return false
+      const key = field === 'modal' ? 'status_show_modal' : field === 'diskon' ? 'status_show_diskon' : 'status_show_harga_cabang'
+      return marketingList.every(item => item[key] === 1)
+    }
   }
 
-  // Handle master toggle / checklist all in thead
+  // Handle master toggle for Posisi / Marketing / Pegawai
   const handleToggleAll = async (field) => {
+    if (activeTab === 'pegawai') {
+      await handleToggleAllMasterUsers(field)
+      return
+    }
+
     const list = activeTab === 'posisi' ? posisiList : marketingList
     const key = field === 'modal' ? 'status_show_modal' : field === 'diskon' ? 'status_show_diskon' : 'status_show_harga_cabang'
     const currentlyAllOn = list.length > 0 && list.every(i => i[key] === 1)
@@ -168,6 +216,48 @@ export default function ManagementPosisi() {
       console.error(e)
       showToast('Koneksi bermasalah', 'error')
       loadData()
+    }
+  }
+
+  // Master toggle across all store users (Pegawai)
+  const handleToggleAllMasterUsers = async (field) => {
+    const key = field === 'modal' ? 'effective_modal' : field === 'diskon' ? 'effective_diskon' : 'effective_harga_cabang'
+    const rawKey = field === 'modal' ? 'status_show_modal' : field === 'diskon' ? 'status_show_diskon' : 'status_show_harga_cabang'
+    const currentlyAllOn = allUsers.length > 0 && allUsers.every(i => i[key] === 1)
+    const newStatus = currentlyAllOn ? 0 : 1
+    const fieldLabels = { modal: 'Harga Modal', diskon: 'Diskon', hargaCabang: 'Harga Cabang' }
+
+    // Optimistic UI update
+    setAllUsers(prev => prev.map(item => ({ ...item, [key]: newStatus, [rawKey]: newStatus })))
+    setGroupUsers(prev => {
+      const updated = {}
+      for (const [gid, uList] of Object.entries(prev)) {
+        updated[gid] = uList.map(u => ({ ...u, [key]: newStatus, [rawKey]: newStatus }))
+      }
+      return updated
+    })
+
+    try {
+      const tok = localStorage.getItem('authToken')
+      const res = await fetch(`${API_BASE}/api/management/users/toggle-all-master`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${tok}`
+        },
+        body: JSON.stringify({ field, status: newStatus })
+      })
+      const json = await res.json()
+      if (json.success) {
+        showToast(`Semua ${fieldLabels[field]} pegawai toko diubah ke ${newStatus === 1 ? 'Terlihat' : 'Tersembunyi'}`)
+      } else {
+        showToast(json.error || 'Gagal mengubah semua status pegawai', 'error')
+        fetchAllUsers()
+      }
+    } catch (e) {
+      console.error(e)
+      showToast('Koneksi bermasalah', 'error')
+      fetchAllUsers()
     }
   }
 
@@ -265,11 +355,25 @@ export default function ManagementPosisi() {
     const fieldKey = field === 'modal' ? 'effective_modal' : field === 'diskon' ? 'effective_diskon' : 'effective_harga_cabang'
     const rawKey = field === 'modal' ? 'status_show_modal' : field === 'diskon' ? 'status_show_diskon' : 'status_show_harga_cabang'
 
-    // Optimistic update
-    setGroupUsers(prev => ({
-      ...prev,
-      [groupId]: prev[groupId]?.map(u => u.id === userId ? { ...u, [fieldKey]: newStatus, [rawKey]: newStatus } : u)
-    }))
+    // Optimistic update allUsers
+    setAllUsers(prev => prev.map(u => u.id === userId ? { ...u, [fieldKey]: newStatus, [rawKey]: newStatus } : u))
+
+    // Optimistic update groupUsers
+    if (groupId) {
+      setGroupUsers(prev => ({
+        ...prev,
+        [groupId]: prev[groupId]?.map(u => u.id === userId ? { ...u, [fieldKey]: newStatus, [rawKey]: newStatus } : u)
+      }))
+    } else {
+      const target = allUsers.find(u => u.id === userId)
+      if (target?.group_id) {
+        setGroupUsers(prev => ({
+          ...prev,
+          [target.group_id]: prev[target.group_id]?.map(u => u.id === userId ? { ...u, [fieldKey]: newStatus, [rawKey]: newStatus } : u)
+        }))
+      }
+    }
+
     setUpdatingId(`user-${userId}-${field}`)
 
     try {
@@ -287,18 +391,24 @@ export default function ManagementPosisi() {
         showToast(`${fieldLabels[field]} akun "${name}" diubah ke ${newStatus === 1 ? 'Terlihat' : 'Tersembunyi'}`)
       } else {
         // Revert
-        setGroupUsers(prev => ({
-          ...prev,
-          [groupId]: prev[groupId]?.map(u => u.id === userId ? { ...u, [fieldKey]: currentVal, [rawKey]: currentVal } : u)
-        }))
+        setAllUsers(prev => prev.map(u => u.id === userId ? { ...u, [fieldKey]: currentVal, [rawKey]: currentVal } : u))
+        if (groupId) {
+          setGroupUsers(prev => ({
+            ...prev,
+            [groupId]: prev[groupId]?.map(u => u.id === userId ? { ...u, [fieldKey]: currentVal, [rawKey]: currentVal } : u)
+          }))
+        }
         showToast(json.error || 'Gagal mengubah status akun', 'error')
       }
     } catch (error) {
       console.error(error)
-      setGroupUsers(prev => ({
-        ...prev,
-        [groupId]: prev[groupId]?.map(u => u.id === userId ? { ...u, [fieldKey]: currentVal, [rawKey]: currentVal } : u)
-      }))
+      setAllUsers(prev => prev.map(u => u.id === userId ? { ...u, [fieldKey]: currentVal, [rawKey]: currentVal } : u))
+      if (groupId) {
+        setGroupUsers(prev => ({
+          ...prev,
+          [groupId]: prev[groupId]?.map(u => u.id === userId ? { ...u, [fieldKey]: currentVal, [rawKey]: currentVal } : u)
+        }))
+      }
       showToast('Koneksi bermasalah', 'error')
     } finally {
       setUpdatingId(null)
@@ -325,6 +435,7 @@ export default function ManagementPosisi() {
       ...prev,
       [groupId]: prev[groupId]?.map(u => ({ ...u, [fieldKey]: newStatus, [rawKey]: newStatus }))
     }))
+    setAllUsers(prev => prev.map(u => Number(u.group_id) === Number(groupId) ? { ...u, [fieldKey]: newStatus, [rawKey]: newStatus } : u))
 
     try {
       const tok = localStorage.getItem('authToken')
@@ -342,11 +453,13 @@ export default function ManagementPosisi() {
       } else {
         showToast(json.error || 'Gagal mengubah status semua akun', 'error')
         fetchGroupUsers(groupId)
+        fetchAllUsers()
       }
     } catch (e) {
       console.error(e)
       showToast('Koneksi bermasalah', 'error')
       fetchGroupUsers(groupId)
+      fetchAllUsers()
     }
   }
 
@@ -397,16 +510,77 @@ export default function ManagementPosisi() {
     }
   }
 
-  const filteredPosisi = posisiList.filter(c => 
-    (c.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (c.description || '').toLowerCase().includes(searchTerm.toLowerCase())
-  )
+  // Filtered lists
+  const filteredPosisi = posisiList.filter(c => {
+    const term = searchTerm.toLowerCase().trim()
+    if (!term) return true
+    const matchesName = (c.name || '').toLowerCase().includes(term)
+    const matchesDesc = (c.description || '').toLowerCase().includes(term)
+    const matchesUser = allUsers.some(u => 
+      Number(u.group_id) === Number(c.id) && (
+        (u.first_name || '').toLowerCase().includes(term) ||
+        (u.last_name || '').toLowerCase().includes(term) ||
+        (u.email || '').toLowerCase().includes(term) ||
+        (u.nama_cabang || '').toLowerCase().includes(term)
+      )
+    )
+    return matchesName || matchesDesc || matchesUser
+  })
 
-  const filteredMarketing = marketingList.filter(m => 
-    (m.nama_lengkap || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (m.username || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (m.nama_cabang || '').toLowerCase().includes(searchTerm.toLowerCase())
-  )
+  const filteredMarketing = marketingList.filter(m => {
+    const term = searchTerm.toLowerCase().trim()
+    if (!term) return true
+    return (
+      (m.nama_lengkap || '').toLowerCase().includes(term) ||
+      (m.username || '').toLowerCase().includes(term) ||
+      (m.nama_cabang || '').toLowerCase().includes(term)
+    )
+  })
+
+  const filteredUsers = allUsers.filter(u => {
+    const term = searchTerm.toLowerCase().trim()
+    const matchesSearch = !term || (
+      (u.first_name || '').toLowerCase().includes(term) ||
+      (u.last_name || '').toLowerCase().includes(term) ||
+      (u.email || '').toLowerCase().includes(term) ||
+      (u.username || '').toLowerCase().includes(term) ||
+      (u.nama_cabang || '').toLowerCase().includes(term) ||
+      (u.group_name || '').toLowerCase().includes(term)
+    )
+    const matchesCabang = !selectedCabangFilter || String(u.id_cabang) === String(selectedCabangFilter)
+    const matchesPosisi = !selectedPosisiFilter || String(u.group_id) === String(selectedPosisiFilter)
+    return matchesSearch && matchesCabang && matchesPosisi
+  })
+
+  // Distinct Cabang & Posisi for dropdown filter in Pegawai tab
+  const uniqueCabangs = Array.from(
+    new Map(allUsers.filter(u => u.nama_cabang).map(u => [u.id_cabang, { id: u.id_cabang, name: u.nama_cabang }])).values()
+  ).sort((a, b) => a.name.localeCompare(b.name))
+
+  const uniquePositions = Array.from(
+    new Map(allUsers.filter(u => u.group_name).map(u => [u.group_id, { id: u.group_id, name: u.group_name }])).values()
+  ).sort((a, b) => a.name.localeCompare(b.name))
+
+  // Helper to filter users inside expanded accordion
+  const getFilteredAccordionUsers = (groupId) => {
+    const users = groupUsers[groupId] || []
+    const term = (userSearchTerms[groupId] || '').toLowerCase().trim()
+    if (!term) return users
+    return users.filter(u => 
+      (u.first_name || '').toLowerCase().includes(term) ||
+      (u.last_name || '').toLowerCase().includes(term) ||
+      (u.email || '').toLowerCase().includes(term) ||
+      (u.nama_cabang || '').toLowerCase().includes(term)
+    )
+  }
+
+  // Check matching employees count when on 'posisi' tab to suggest switching tabs
+  const matchingEmployeesInPegawaiTab = searchTerm.trim() ? allUsers.filter(u =>
+    (u.first_name || '').toLowerCase().includes(searchTerm.toLowerCase().trim()) ||
+    (u.last_name || '').toLowerCase().includes(searchTerm.toLowerCase().trim()) ||
+    (u.email || '').toLowerCase().includes(searchTerm.toLowerCase().trim()) ||
+    (u.nama_cabang || '').toLowerCase().includes(searchTerm.toLowerCase().trim())
+  ).length : 0
 
   return (
     <div className="p-4 md:p-6 bg-slate-50 min-h-screen">
@@ -427,16 +601,16 @@ export default function ManagementPosisi() {
             <Shield className="text-primary" /> Manajemen Akses Harga & Diskon
           </h1>
           <p className="text-slate-500 text-sm mt-1">
-            Atur visibilitas Harga Modal, Diskon, dan Harga Cabang per Posisi (Role) maupun per Akun Marketing
+            Atur visibilitas Harga Modal, Diskon, dan Harga Cabang per Posisi (Role) maupun per Akun Pegawai Toko & Marketing
           </p>
         </div>
       </div>
 
       {/* Tabs */}
-      <div className="flex border-b border-slate-200 mb-6 bg-white rounded-t-lg px-4 pt-3 shadow-sm">
+      <div className="flex flex-wrap border-b border-slate-200 mb-6 bg-white rounded-t-lg px-4 pt-3 shadow-sm gap-2">
         <button
           onClick={() => setActiveTab('posisi')}
-          className={`flex items-center gap-2 pb-3 px-4 text-sm font-semibold border-b-2 transition-colors ${
+          className={`flex items-center gap-2 pb-3 px-4 text-sm font-semibold border-b-2 transition-colors cursor-pointer ${
             activeTab === 'posisi'
               ? 'border-primary text-primary'
               : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -450,15 +624,30 @@ export default function ManagementPosisi() {
         </button>
 
         <button
-          onClick={() => setActiveTab('marketing')}
-          className={`flex items-center gap-2 pb-3 px-4 text-sm font-semibold border-b-2 transition-colors ${
-            activeTab === 'marketing'
+          onClick={() => setActiveTab('pegawai')}
+          className={`flex items-center gap-2 pb-3 px-4 text-sm font-semibold border-b-2 transition-colors cursor-pointer ${
+            activeTab === 'pegawai'
               ? 'border-primary text-primary'
               : 'border-transparent text-slate-500 hover:text-slate-800'
           }`}
         >
           <UserCheck size={18} />
-          <span>Akun Marketing (Per User)</span>
+          <span>Cari & Kelola Pegawai Toko</span>
+          <span className="ml-1 text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full font-bold">
+            {allUsers.length}
+          </span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('marketing')}
+          className={`flex items-center gap-2 pb-3 px-4 text-sm font-semibold border-b-2 transition-colors cursor-pointer ${
+            activeTab === 'marketing'
+              ? 'border-primary text-primary'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <Shield size={18} />
+          <span>Akun Marketing (Level 4)</span>
           <span className="ml-1 text-xs bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-bold">
             {marketingList.length}
           </span>
@@ -467,25 +656,118 @@ export default function ManagementPosisi() {
 
       {/* Main Table Card */}
       <div className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
-        {/* Search Bar */}
-        <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
-          <div className="relative max-w-md w-full">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-            <input 
-              type="text" 
-              placeholder={activeTab === 'posisi' ? "Cari nama posisi atau deskripsi..." : "Cari nama marketing, username, atau cabang..."}
-              className="w-full pl-10 pr-4 py-2 border rounded-md text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary bg-white"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
+        {/* Search & Filter Bar */}
+        <div className="p-4 border-b border-slate-200 bg-slate-50 flex flex-col gap-3">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+            <div className="relative max-w-md w-full">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+              <input 
+                type="text" 
+                placeholder={
+                  activeTab === 'posisi' 
+                    ? "Cari nama posisi, deskripsi, atau nama pegawai..." 
+                    : activeTab === 'pegawai'
+                    ? "Cari nama pegawai, email, cabang, atau posisi..."
+                    : "Cari nama marketing, username, atau cabang..."
+                }
+                className="w-full pl-10 pr-4 py-2 border rounded-md text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary bg-white shadow-xs"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
+            </div>
+
+            {/* Quick Filters for Pegawai Tab */}
+            {activeTab === 'pegawai' && (
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-md px-2.5 py-1.5 text-xs text-slate-600">
+                  <Building size={14} className="text-slate-400" />
+                  <select 
+                    value={selectedCabangFilter}
+                    onChange={(e) => setSelectedCabangFilter(e.target.value)}
+                    className="outline-none bg-transparent cursor-pointer font-medium text-slate-700"
+                  >
+                    <option value="">Semua Cabang Toko</option>
+                    {uniqueCabangs.map(cb => (
+                      <option key={cb.id} value={cb.id}>{cb.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-md px-2.5 py-1.5 text-xs text-slate-600">
+                  <Filter size={14} className="text-slate-400" />
+                  <select 
+                    value={selectedPosisiFilter}
+                    onChange={(e) => setSelectedPosisiFilter(e.target.value)}
+                    className="outline-none bg-transparent cursor-pointer font-medium text-slate-700"
+                  >
+                    <option value="">Semua Posisi / Role</option>
+                    {uniquePositions.map(pos => (
+                      <option key={pos.id} value={pos.id}>{pos.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {(searchTerm || selectedCabangFilter || selectedPosisiFilter) && (
+                  <button
+                    onClick={() => {
+                      setSearchTerm('')
+                      setSelectedCabangFilter('')
+                      setSelectedPosisiFilter('')
+                    }}
+                    className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-slate-800 bg-white border border-slate-200 hover:bg-slate-100 px-2.5 py-1.5 rounded-md cursor-pointer transition-colors shadow-2xs font-medium"
+                    title="Reset semua filter"
+                  >
+                    <RotateCcw size={13} />
+                    <span>Reset</span>
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Reset button for other tabs */}
+            {activeTab !== 'pegawai' && searchTerm && (
+              <button
+                onClick={() => setSearchTerm('')}
+                className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-slate-800 bg-white border border-slate-200 hover:bg-slate-100 px-2.5 py-1.5 rounded-md cursor-pointer transition-colors shadow-2xs font-medium self-start md:self-auto"
+              >
+                <RotateCcw size={13} />
+                <span>Reset Pencarian</span>
+              </button>
+            )}
           </div>
-          {searchTerm && (
-            <button
-              onClick={() => setSearchTerm('')}
-              className="text-xs text-slate-500 hover:text-slate-800 underline ml-2"
-            >
-              Reset
-            </button>
+
+          {/* Smart cross-tab hint when user searches in Posisi tab */}
+          {activeTab === 'posisi' && searchTerm.trim() && matchingEmployeesInPegawaiTab > 0 && (
+            <div className="bg-sky-50 border border-sky-200 text-sky-900 px-3.5 py-2.5 rounded-lg flex items-center justify-between text-xs transition-all shadow-2xs">
+              <div className="flex items-center gap-2">
+                <Sparkles size={16} className="text-sky-600 shrink-0" />
+                <span>
+                  Ditemukan <strong>{matchingEmployeesInPegawaiTab} pegawai toko</strong> yang cocok dengan kata kunci "<strong>{searchTerm}</strong>".
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveTab('pegawai')}
+                className="font-bold text-sky-700 hover:text-sky-900 hover:underline flex items-center gap-1 cursor-pointer shrink-0 ml-3"
+              >
+                Buka Tab Cari Pegawai &rarr;
+              </button>
+            </div>
+          )}
+
+          {/* Active filter count on Pegawai Tab */}
+          {activeTab === 'pegawai' && (
+            <div className="flex items-center justify-between text-xs text-slate-500 pt-1 border-t border-slate-200/60">
+              <span>
+                Menampilkan <strong>{filteredUsers.length}</strong> dari <strong>{allUsers.length}</strong> akun pegawai
+                {(selectedCabangFilter || selectedPosisiFilter || searchTerm) && (
+                  <span className="text-primary font-medium ml-1">(Tersaring)</span>
+                )}
+              </span>
+              <span className="italic text-[11px] text-slate-400 hidden sm:inline">
+                * Pengaturan per akun otomatis meng-override default posisi & cabang
+              </span>
+            </div>
           )}
         </div>
         
@@ -542,6 +824,17 @@ export default function ManagementPosisi() {
                 ) : (
                   filteredPosisi.map(c => {
                     const isMarketingGroup = c.id === 4 || c.name.toLowerCase().includes('marketing')
+                    const matchingUsersInThisGroup = searchTerm.trim() ? allUsers.filter(u =>
+                      Number(u.group_id) === Number(c.id) && (
+                        (u.first_name || '').toLowerCase().includes(searchTerm.toLowerCase().trim()) ||
+                        (u.last_name || '').toLowerCase().includes(searchTerm.toLowerCase().trim()) ||
+                        (u.email || '').toLowerCase().includes(searchTerm.toLowerCase().trim()) ||
+                        (u.nama_cabang || '').toLowerCase().includes(searchTerm.toLowerCase().trim())
+                      )
+                    ) : []
+
+                    const displayAccordionUsers = getFilteredAccordionUsers(c.id)
+
                     return (
                       <React.Fragment key={c.id}>
                         <tr className={`hover:bg-slate-50 transition-colors ${isMarketingGroup ? 'bg-amber-50/40' : ''} ${expandedGroupId === c.id ? 'bg-slate-100/70 border-b-0' : ''}`}>
@@ -564,6 +857,11 @@ export default function ManagementPosisi() {
                               {isMarketingGroup && (
                                 <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300">
                                   Level 4 (Marketing)
+                                </span>
+                              )}
+                              {matchingUsersInThisGroup.length > 0 && (
+                                <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-200">
+                                  {matchingUsersInThisGroup.length} pegawai cocok
                                 </span>
                               )}
                             </div>
@@ -614,19 +912,38 @@ export default function ManagementPosisi() {
                           <tr className="bg-slate-100/40 border-b-2 border-slate-300">
                             <td colSpan={5} className="p-3 pl-8 md:pl-10">
                               <div className="bg-white rounded-xl border border-slate-200/90 p-4 shadow-sm">
-                                <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 mb-3 border-b border-slate-200 gap-2">
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 mb-3 border-b border-slate-200 gap-3">
                                   <div className="flex items-center gap-2">
                                     <UserCheck size={18} className="text-primary" />
                                     <h4 className="font-bold text-slate-800 text-sm">
-                                      Daftar Akun Pegawai untuk Posisi: <span className="text-primary">{c.name}</span>
+                                      Daftar Akun Pegawai: <span className="text-primary">{c.name}</span>
                                     </h4>
                                     <span className="text-xs bg-slate-100 text-slate-700 px-2.5 py-0.5 rounded-full font-bold border border-slate-200">
-                                      {(groupUsers[c.id] || []).length} Akun Terdaftar
+                                      {(groupUsers[c.id] || []).length} Akun
                                     </span>
                                   </div>
-                                  <p className="text-xs text-slate-500 italic">
-                                    * Pengaturan per akun ini otomatis meng-override default posisi ({c.name})
-                                  </p>
+
+                                  {/* Quick search inside accordion */}
+                                  <div className="flex items-center gap-2">
+                                    <div className="relative max-w-xs w-full">
+                                      <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+                                      <input
+                                        type="text"
+                                        placeholder="Cari pegawai di posisi ini..."
+                                        className="w-full pl-8 pr-3 py-1.5 border border-slate-200 rounded-md text-xs outline-none focus:border-primary focus:ring-1 focus:ring-primary bg-slate-50 focus:bg-white transition-all shadow-2xs"
+                                        value={userSearchTerms[c.id] || ''}
+                                        onChange={(e) => setUserSearchTerms(prev => ({ ...prev, [c.id]: e.target.value }))}
+                                      />
+                                    </div>
+                                    {userSearchTerms[c.id] && (
+                                      <button
+                                        onClick={() => setUserSearchTerms(prev => ({ ...prev, [c.id]: '' }))}
+                                        className="text-[11px] text-slate-500 hover:text-slate-800 underline"
+                                      >
+                                        Reset
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
 
                                 {loadingGroupUsers && !groupUsers[c.id] ? (
@@ -637,6 +954,10 @@ export default function ManagementPosisi() {
                                 ) : (groupUsers[c.id] || []).length === 0 ? (
                                   <div className="py-6 text-center text-slate-500 text-xs bg-slate-50 rounded-lg border border-dashed border-slate-200">
                                     Tidak ada akun pegawai aktif yang terdaftar di posisi "{c.name}".
+                                  </div>
+                                ) : displayAccordionUsers.length === 0 ? (
+                                  <div className="py-6 text-center text-slate-500 text-xs bg-slate-50 rounded-lg border border-dashed border-slate-200">
+                                    Tidak ada pegawai yang cocok dengan filter pencarian "{userSearchTerms[c.id]}".
                                   </div>
                                 ) : (
                                   <div className="overflow-x-auto rounded-lg border border-slate-200">
@@ -673,7 +994,7 @@ export default function ManagementPosisi() {
                                         </tr>
                                       </thead>
                                       <tbody className="divide-y divide-slate-100 bg-white">
-                                        {groupUsers[c.id].map(u => (
+                                        {displayAccordionUsers.map(u => (
                                           <tr key={u.id} className="hover:bg-slate-50/80 transition-colors">
                                             <td className="px-4 py-3 font-medium text-slate-800">
                                               {u.first_name} {u.last_name || ''}
@@ -726,7 +1047,145 @@ export default function ManagementPosisi() {
                 )}
               </tbody>
             </table>
+          ) : activeTab === 'pegawai' ? (
+            /* ================= TAB CARI & KELOLA PEGAWAI TOKO ================= */
+            <table className="w-full text-sm text-left">
+              <thead className="text-xs text-slate-600 uppercase bg-slate-100 border-b border-slate-200">
+                <tr>
+                  <th className="px-5 py-3.5 font-semibold">Nama Pegawai</th>
+                  <th className="px-5 py-3.5 font-semibold">Email Login</th>
+                  <th className="px-5 py-3.5 font-semibold">Posisi / Role</th>
+                  <th className="px-5 py-3.5 font-semibold">Cabang Toko</th>
+                  <th className="px-5 py-3.5 text-center">
+                    <ColumnHeaderWithChecklist
+                      label="Harga Modal"
+                      field="modal"
+                      isChecked={isAllChecked('modal')}
+                      onToggleAll={() => handleToggleAll('modal')}
+                    />
+                  </th>
+                  <th className="px-5 py-3.5 text-center">
+                    <ColumnHeaderWithChecklist
+                      label="Diskon"
+                      field="diskon"
+                      isChecked={isAllChecked('diskon')}
+                      onToggleAll={() => handleToggleAll('diskon')}
+                    />
+                  </th>
+                  <th className="px-5 py-3.5 text-center">
+                    <ColumnHeaderWithChecklist
+                      label="Harga Cabang"
+                      field="hargaCabang"
+                      isChecked={isAllChecked('hargaCabang')}
+                      onToggleAll={() => handleToggleAll('hargaCabang')}
+                    />
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {loading ? (
+                  <tr>
+                    <td colSpan="7" className="px-6 py-12 text-center text-slate-500">
+                      <div className="flex items-center justify-center gap-2">
+                        <Loader2 className="animate-spin text-primary" size={20} />
+                        <span>Memuat seluruh akun pegawai toko...</span>
+                      </div>
+                    </td>
+                  </tr>
+                ) : filteredUsers.length === 0 ? (
+                  <tr>
+                    <td colSpan="7" className="px-6 py-12 text-center text-slate-500">
+                      <div className="flex flex-col items-center justify-center gap-2">
+                        <Search size={32} className="text-slate-300" />
+                        <p className="font-medium text-slate-700">Tidak ada pegawai yang sesuai dengan filter.</p>
+                        <p className="text-xs text-slate-400">
+                          {searchTerm ? `Kata kunci: "${searchTerm}"` : 'Coba ubah filter cabang atau posisi'}
+                        </p>
+                        {(searchTerm || selectedCabangFilter || selectedPosisiFilter) && (
+                          <button
+                            onClick={() => {
+                              setSearchTerm('')
+                              setSelectedCabangFilter('')
+                              setSelectedPosisiFilter('')
+                            }}
+                            className="mt-2 text-xs text-primary hover:underline font-semibold"
+                          >
+                            Reset Semua Filter
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredUsers.map(u => {
+                    const fullName = `${u.first_name} ${u.last_name || ''}`.trim()
+                    const initials = (u.first_name ? u.first_name[0] : '') + (u.last_name ? u.last_name[0] : '')
+
+                    return (
+                      <tr key={u.id} className="hover:bg-slate-50 transition-colors">
+                        <td className="px-5 py-3.5 font-medium text-slate-800">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center text-xs font-bold text-slate-600 shrink-0 uppercase">
+                              {initials || <User size={14} />}
+                            </div>
+                            <div>
+                              <div className="font-semibold text-slate-800 text-sm leading-snug">
+                                {fullName}
+                              </div>
+                              <div className="text-[11px] text-slate-400 font-mono">
+                                @{u.username}
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-5 py-3.5 text-slate-600 font-mono text-xs">
+                          {u.email}
+                        </td>
+                        <td className="px-5 py-3.5 text-slate-700">
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-purple-50 text-purple-700 border border-purple-200 shadow-2xs">
+                            {u.group_name || 'Tidak Ada Posisi'}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3.5 text-slate-700">
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200 shadow-2xs">
+                            <Building size={12} className="mr-1 text-blue-500" />
+                            {u.nama_cabang || 'Pusat / Semua'}
+                          </span>
+                        </td>
+                        
+                        {/* Toggle Switches */}
+                        <td className="px-5 py-3.5 text-center">
+                          <ToggleSwitch 
+                            enabled={u.effective_modal === 1}
+                            loading={updatingId === `user-${u.id}-modal`}
+                            onToggle={() => handleToggleUser(u.id, 'modal', u.effective_modal, fullName, u.group_id)}
+                            label="Harga Modal"
+                          />
+                        </td>
+                        <td className="px-5 py-3.5 text-center">
+                          <ToggleSwitch 
+                            enabled={u.effective_diskon === 1}
+                            loading={updatingId === `user-${u.id}-diskon`}
+                            onToggle={() => handleToggleUser(u.id, 'diskon', u.effective_diskon, fullName, u.group_id)}
+                            label="Diskon"
+                          />
+                        </td>
+                        <td className="px-5 py-3.5 text-center">
+                          <ToggleSwitch 
+                            enabled={u.effective_harga_cabang === 1}
+                            loading={updatingId === `user-${u.id}-hargaCabang`}
+                            onToggle={() => handleToggleUser(u.id, 'hargaCabang', u.effective_harga_cabang, fullName, u.group_id)}
+                            label="Harga Cabang"
+                          />
+                        </td>
+                      </tr>
+                    )
+                  })
+                )}
+              </tbody>
+            </table>
           ) : (
+            /* ================= TAB AKUN MARKETING ================= */
             <table className="w-full text-sm text-left">
               <thead className="text-xs text-slate-600 uppercase bg-slate-100 border-b border-slate-200">
                 <tr>
