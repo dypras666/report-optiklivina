@@ -1,0 +1,11 @@
+#!/usr/bin/expect -f
+set timeout 30
+set cmd [join $argv " "]
+spawn ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o PubkeyAuthentication=no root@103.65.237.197 $cmd
+expect {
+    "password:" {
+        send "3^k62n@yIj8N\r"
+        exp_continue
+    }
+    eof
+}

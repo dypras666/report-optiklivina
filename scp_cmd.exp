@@ -1,0 +1,12 @@
+#!/usr/bin/expect -f
+set timeout 60
+set src [lindex $argv 0]
+set dest [lindex $argv 1]
+spawn scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o PubkeyAuthentication=no -r $src root@103.65.237.197:$dest
+expect {
+    "password:" {
+        send "3^k62n@yIj8N\r"
+        exp_continue
+    }
+    eof
+}

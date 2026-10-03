@@ -29,9 +29,12 @@ export async function fetchMarketingReports({ pembukuanId, marketingId, cabangId
   
   const offset = Math.max(0, (Number(page) - 1) * Number(limit))
   
+  const bukaBukuStr = active.tanggal_buka_buku instanceof Date ? active.tanggal_buka_buku.toISOString().split('T')[0] : String(active.tanggal_buka_buku).substring(0, 10)
+  const tutupBukuStr = active.tanggal_tutup_buku instanceof Date ? active.tanggal_tutup_buku.toISOString().split('T')[0] : String(active.tanggal_tutup_buku).substring(0, 10)
+  
   const must = [
     { term: { id_pembukuan: active.id_toko_tutup } },
-    { range: { tanggal_order: { gte: active.tanggal_buka_buku.toISOString().split('T')[0], lte: active.tanggal_tutup_buku.toISOString().split('T')[0] } } }
+    { range: { tanggal_order: { gte: bukaBukuStr, lte: tutupBukuStr } } }
   ]
   
   if (marketingId) must.push({ term: { id_marketing: marketingId } })

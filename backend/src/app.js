@@ -17,6 +17,7 @@ import analyticsRouter from './routes/analytics.js'
 import ktpRouter from './routes/ktp.js'
 import collectorsRouter from './routes/collectors.js'
 import sponsorsRouter from './routes/sponsors.js'
+import managementRouter from './routes/management.js'
 
 import { fetchMarketingOverdue, fetchMarketingOverdueTransactions, fetchMarketingProductDistribution, fetchMarketingCustomerCompleteness } from './services/reportsService.js'
 import { fetchMarketingProductItems, fetchMarketingMonthlyTransactions, fetchMarketingTransactionsBasic, fetchMarketingProductItemsBatch, fetchMarketingProductItemsPage, fetchMarketingProductItemsCorePage, enrichProductRows } from './services/reportsService.js'
@@ -134,6 +135,7 @@ app.use('/api/options', optionsRouter)
 app.use('/api/analytics', requireAuth, analyticsRouter)
 app.use('/api/collectors', requireAuth, collectorsRouter)
 app.use('/api/sponsors', requireAuth, sponsorsRouter)
+app.use('/api/management', requireAuth, managementRouter)
 app.use('/api', requireAuth, ktpRouter)
 
 
