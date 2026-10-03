@@ -33,6 +33,8 @@ import CollectorPayments from './pages/CollectorPayments.jsx'
 import CollectorManagement from './pages/CollectorManagement.jsx'
 import PointUsage from './pages/PointUsage.jsx'
 import SponsorApproval from './pages/SponsorApproval.jsx'
+import ManagementCabang from './pages/ManagementCabang.jsx'
+import ManagementPosisi from './pages/ManagementPosisi.jsx'
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'https://reportsapi.optiklivina.com'
 const OMSET_URL = import.meta.env.VITE_OMSET_URL || ''
@@ -499,6 +501,10 @@ export default function App() {
             <SponsorApproval />
           ) : routeBase === 'collector-management' ? (
             <CollectorManagement />
+          ) : routeBase === 'management-cabang' ? (
+            <ManagementCabang />
+          ) : routeBase === 'management-posisi' ? (
+            <ManagementPosisi />
           ) : (
             <>
               {routeBase === 'collector-payments' && (

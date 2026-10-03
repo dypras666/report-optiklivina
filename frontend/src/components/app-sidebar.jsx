@@ -28,7 +28,9 @@ import {
   Database,
   PieChart,
   ClipboardList,
-  Check
+  Check,
+  Settings,
+  Building
 } from 'lucide-react'
 
 export default function AppSidebar() {
@@ -64,6 +66,11 @@ export default function AppSidebar() {
     { title: 'Customer List', url: '#/customers', icon: Users },
     { title: 'Poin Customer', url: '#/best-customers', icon: TrendingUp },
     { title: 'Riwayat Poin', url: '#/point-usage', icon: ClipboardList },
+  ]
+
+  const systemItems = [
+    { title: 'Data Cabang', url: '#/management-cabang', icon: Building },
+    { title: 'Posisi Karyawan', url: '#/management-posisi', icon: Users },
   ]
 
   const masterLinks = [
@@ -128,6 +135,7 @@ export default function AppSidebar() {
         <MenuSection label="Toko & Penjualan" items={tokoItems} />
         <MenuSection label="Analisis & Profit" items={analysisItems} />
         <MenuSection label="Voucher & Customer" items={voucherCustomerItems} />
+        <MenuSection label="Pengaturan Sistem" items={systemItems} />
 
         <SidebarGroup>
           <SidebarGroupLabel className={`text-xs font-semibold text-slate-500 uppercase tracking-wider ${state === 'collapsed' ? 'hidden' : ''}`}>Master Data</SidebarGroupLabel>
